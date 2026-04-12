@@ -13,6 +13,7 @@ go run ./cmd/server # Run dev server
 go test ./... # Run all tests
 go test -v -run TestName ./path/to/pkg # Run single test
 go build -o test-output ./cmd/server && rm test-output # Verify compile (REQUIRED after changes)
+./server-build.sh # Production deploy on glittering-book: build -> versioned ~/deploy/bin symlink -> restart -> /healthz check -> auto rollback on failure
 ```
 - Common flags: `--config <path>`, `--tui`, `--standalone`, `--local-model`, `--no-browser`, `--oauth-callback-port <port>`
 
@@ -28,6 +29,7 @@ go build -o test-output ./cmd/server && rm test-output # Verify compile (REQUIRE
 - `internal/api/modules/amp/` — Amp integration (Amp-style routes + reverse proxy)
 - `internal/thinking/` — Main thinking/reasoning pipeline. `ApplyThinking()` (apply.go) parses suffixes (`suffix.go`, suffix overrides body), normalizes config to canonical `ThinkingConfig` (`types.go`), normalizes and validates centrally (`validate.go`/`convert.go`), then applies provider-specific output via `ProviderApplier`. Do not break this "canonical representation → per-provider translation" architecture.
 - `internal/runtime/executor/` — Per-provider runtime executors (incl. Codex WebSocket)
+- Claude cloaking/system injection note: `checkSystemInstructionsWithMode()` / `applyCloaking()` currently rewrite Claude requests to use exactly 3 injected `system[]` blocks (billing header, Claude Code agent identifier, static Claude Code prompt). User-supplied `system` prompts are forwarded to the first user message via `<system-reminder>` unless strict mode is enabled. Keep executor tests aligned with this behavior.
 - `internal/translator/` — Provider protocol translators (and shared `common`)
 - `internal/registry/` — Model registry + remote updater (`StartModelsUpdater`); `--local-model` disables remote updates
 - `internal/store/` — Storage implementations and secret resolution
@@ -56,3 +58,8 @@ go build -o test-output ./cmd/server && rm test-output # Verify compile (REQUIRE
 - Use logrus structured logging; avoid leaking secrets/tokens in logs
 - Avoid panics in HTTP handlers; prefer logged errors and meaningful HTTP status codes
 - Timeouts are allowed only during credential acquisition; after an upstream connection is established, do not set timeouts for any subsequent network behavior. Intentional exceptions that must remain allowed are the Codex websocket liveness deadlines in `internal/runtime/executor/codex_websockets_executor.go`, the wsrelay session deadlines in `internal/wsrelay/session.go`, the management APICall timeout in `internal/api/handlers/management/api_tools.go`, and the `cmd/fetch_antigravity_models` utility timeouts
+
+## Deployment Notes
+- On this production host, the live CLIProxyAPI service is `cliproxyapi` and runs with `-config /home/iec/deploy/etc/cliproxyapi.yaml`.
+- Live auth files/logs are under `~/deploy/auths/`; CLIProxyAPI runtime logs are typically tailed from `~/deploy/auths/logs/main.log`.
+- `server-build.sh` is the preferred production deployment entrypoint in this repo. It reads the health-check port from `~/deploy/etc/cliproxyapi.yaml`, updates `~/deploy/bin/cliproxyapi`, restarts `cliproxyapi`, and rolls back to the previous symlink target automatically if restart or `/healthz` fails.
