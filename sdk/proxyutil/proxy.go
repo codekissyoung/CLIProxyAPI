@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"golang.org/x/net/proxy"
 )
@@ -68,11 +69,25 @@ func Parse(raw string) (Setting, error) {
 	}
 }
 
+var ipv4OnlyDialer = &net.Dialer{
+	Timeout:   30 * time.Second,
+	KeepAlive: 30 * time.Second,
+}
+
+func ipv4OnlyDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	if network == "tcp" {
+		network = "tcp4"
+	}
+	return ipv4OnlyDialer.DialContext(ctx, network, addr)
+}
+
 func cloneDefaultTransport() *http.Transport {
 	if transport, ok := http.DefaultTransport.(*http.Transport); ok && transport != nil {
-		return transport.Clone()
+		clone := transport.Clone()
+		clone.DialContext = ipv4OnlyDialContext
+		return clone
 	}
-	return &http.Transport{}
+	return &http.Transport{DialContext: ipv4OnlyDialContext}
 }
 
 // NewDirectTransport returns a transport that bypasses environment proxies.

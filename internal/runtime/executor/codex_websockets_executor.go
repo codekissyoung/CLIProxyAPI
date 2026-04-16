@@ -701,10 +701,15 @@ func newProxyAwareWebsocketDialer(cfg *config.Config, auth *cliproxyauth.Auth) *
 		Proxy:             http.ProxyFromEnvironment,
 		HandshakeTimeout:  codexResponsesWebsocketHandshakeTO,
 		EnableCompression: true,
-		NetDialContext: (&net.Dialer{
-			Timeout:   30 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
+		NetDialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			if network == "tcp" {
+				network = "tcp4"
+			}
+			return (&net.Dialer{
+				Timeout:   30 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext(ctx, network, addr)
+		},
 	}
 
 	proxyURL := ""
