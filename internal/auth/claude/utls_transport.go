@@ -30,7 +30,7 @@ type utlsRoundTripper struct {
 
 // newUtlsRoundTripper creates a new utls-based round tripper with optional proxy support
 func newUtlsRoundTripper(cfg *config.SDKConfig) *utlsRoundTripper {
-	var dialer proxy.Dialer = proxy.Direct
+	var dialer proxy.Dialer = proxyutil.IPv4OnlyDirect
 	if cfg != nil {
 		proxyDialer, mode, errBuild := proxyutil.BuildDialer(cfg.ProxyURL)
 		if errBuild != nil {

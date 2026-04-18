@@ -32,6 +32,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	sdkAuth "github.com/router-for-me/CLIProxyAPI/v6/sdk/auth"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
+	"github.com/router-for-me/CLIProxyAPI/v6/sdk/proxyutil"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -54,6 +55,11 @@ func init() {
 // It parses command-line flags, loads configuration, and starts the appropriate
 // service based on the provided flags (login, codex-login, or server mode).
 func main() {
+	// Force every outbound HTTP client to dial IPv4 only. The VPS IPv6 range is
+	// rate-limited by Cloudflare in front of chatgpt.com / api.anthropic.com, so
+	// any path that silently falls back to AAAA triggers "Unable to load site".
+	proxyutil.EnforceIPv4OnlyDefaultTransport()
+
 	fmt.Printf("CLIProxyAPI Version: %s, Commit: %s, BuiltAt: %s\n", buildinfo.Version, buildinfo.Commit, buildinfo.BuildDate)
 
 	// Command-line flags to control the application's behavior.

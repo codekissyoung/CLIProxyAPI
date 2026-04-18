@@ -33,6 +33,7 @@ import (
 	sdkAuth "github.com/router-for-me/CLIProxyAPI/v6/sdk/auth"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
+	"github.com/router-for-me/CLIProxyAPI/v6/sdk/proxyutil"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v6/sdk/translator"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
@@ -159,7 +160,7 @@ func cloneTransportWithHTTP11(base *http.Transport) *http.Transport {
 func initAntigravityTransport() {
 	base, ok := http.DefaultTransport.(*http.Transport)
 	if !ok {
-		base = &http.Transport{}
+		base = &http.Transport{DialContext: proxyutil.IPv4OnlyDialContext}
 	}
 	antigravityTransport = cloneTransportWithHTTP11(base)
 }

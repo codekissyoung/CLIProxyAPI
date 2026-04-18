@@ -26,7 +26,7 @@ type utlsRoundTripper struct {
 }
 
 func newUtlsRoundTripper(proxyURL string) *utlsRoundTripper {
-	var dialer proxy.Dialer = proxy.Direct
+	var dialer proxy.Dialer = proxyutil.IPv4OnlyDirect
 	if proxyURL != "" {
 		proxyDialer, mode, errBuild := proxyutil.BuildDialer(proxyURL)
 		if errBuild != nil {
@@ -164,10 +164,7 @@ func NewUtlsHTTPClient(cfg *config.Config, auth *cliproxyauth.Auth, timeout time
 	utlsRT := newUtlsRoundTripper(proxyURL)
 
 	var standardTransport http.RoundTripper = &http.Transport{
-		DialContext: (&net.Dialer{
-			Timeout:   30 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
+		DialContext: proxyutil.IPv4OnlyDialContext,
 	}
 	if proxyURL != "" {
 		if transport := buildProxyTransport(proxyURL); transport != nil {

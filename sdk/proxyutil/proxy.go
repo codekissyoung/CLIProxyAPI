@@ -74,20 +74,45 @@ var ipv4OnlyDialer = &net.Dialer{
 	KeepAlive: 30 * time.Second,
 }
 
-func ipv4OnlyDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+// IPv4OnlyDialContext is an http.Transport.DialContext that forces "tcp" to "tcp4".
+// Use this anywhere an http.Transport is constructed by hand so outbound connections
+// avoid AAAA resolution paths that are subject to Cloudflare/VPS IPv6 risk control.
+func IPv4OnlyDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
 	if network == "tcp" {
 		network = "tcp4"
 	}
 	return ipv4OnlyDialer.DialContext(ctx, network, addr)
 }
 
+// IPv4OnlyDirect is a drop-in replacement for proxy.Direct that rewrites "tcp" to "tcp4".
+// Substitute for proxy.Direct in dialer chains that feed custom transports (e.g. utls).
+var IPv4OnlyDirect proxy.Dialer = ipv4OnlyDirectDialer{}
+
+type ipv4OnlyDirectDialer struct{}
+
+func (ipv4OnlyDirectDialer) Dial(network, addr string) (net.Conn, error) {
+	if network == "tcp" {
+		network = "tcp4"
+	}
+	return ipv4OnlyDialer.Dial(network, addr)
+}
+
+// EnforceIPv4OnlyDefaultTransport mutates http.DefaultTransport in place so every
+// http.Client that relies on the default transport dials IPv4 only. Call once at
+// program startup, before any HTTP client issues requests.
+func EnforceIPv4OnlyDefaultTransport() {
+	if transport, ok := http.DefaultTransport.(*http.Transport); ok && transport != nil {
+		transport.DialContext = IPv4OnlyDialContext
+	}
+}
+
 func cloneDefaultTransport() *http.Transport {
 	if transport, ok := http.DefaultTransport.(*http.Transport); ok && transport != nil {
 		clone := transport.Clone()
-		clone.DialContext = ipv4OnlyDialContext
+		clone.DialContext = IPv4OnlyDialContext
 		return clone
 	}
-	return &http.Transport{DialContext: ipv4OnlyDialContext}
+	return &http.Transport{DialContext: IPv4OnlyDialContext}
 }
 
 // NewDirectTransport returns a transport that bypasses environment proxies.
