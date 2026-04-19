@@ -624,7 +624,7 @@ func (e *CodexExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*
 	if refreshToken == "" {
 		return auth, nil
 	}
-	svc := codexauth.NewCodexAuth(e.cfg)
+	svc := codexauth.NewCodexAuthWithProxyURL(e.cfg, auth.ProxyURL)
 	var td *codexauth.CodexTokenData
 	var err error
 	if codexauth.IsIOSToken(idToken) {
