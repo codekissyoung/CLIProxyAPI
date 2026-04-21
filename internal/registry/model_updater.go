@@ -335,14 +335,24 @@ func validateModelsCatalog(data *staticModelsJSON) error {
 		{name: "codex-team", models: data.CodexTeam},
 		{name: "codex-plus", models: data.CodexPlus},
 		{name: "codex-pro", models: data.CodexPro},
-		{name: "qwen", models: data.Qwen},
-		{name: "iflow", models: data.IFlow},
 		{name: "kimi", models: data.Kimi},
 		{name: "antigravity", models: data.Antigravity},
 	}
 
 	for _, section := range requiredSections {
 		if err := validateModelSection(section.name, section.models); err != nil {
+			return err
+		}
+	}
+	optionalSections := []struct {
+		name   string
+		models []*ModelInfo
+	}{
+		{name: "qwen", models: data.Qwen},
+		{name: "iflow", models: data.IFlow},
+	}
+	for _, section := range optionalSections {
+		if err := validateOptionalModelSection(section.name, section.models); err != nil {
 			return err
 		}
 	}
@@ -369,4 +379,11 @@ func validateModelSection(section string, models []*ModelInfo) error {
 		seen[modelID] = struct{}{}
 	}
 	return nil
+}
+
+func validateOptionalModelSection(section string, models []*ModelInfo) error {
+	if len(models) == 0 {
+		return nil
+	}
+	return validateModelSection(section, models)
 }
