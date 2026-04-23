@@ -132,11 +132,7 @@ func (p *pprofServer) stopServerWithContext(ctx context.Context, server *http.Se
 	if server == nil {
 		return nil
 	}
-	stopCtx := ctx
-	if stopCtx == nil {
-		stopCtx = context.Background()
-	}
-	stopCtx, cancel := context.WithTimeout(stopCtx, 5*time.Second)
+	stopCtx, cancel := newGracefulShutdownContext(ctx, 5*time.Second)
 	defer cancel()
 	if errStop := server.Shutdown(stopCtx); errStop != nil {
 		log.Errorf("pprof server stop failed on %s: %v", addr, errStop)

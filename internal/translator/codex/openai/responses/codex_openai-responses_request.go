@@ -74,11 +74,9 @@ func convertSystemRoleToDeveloper(rawJSON []byte) []byte {
 	inputArray := inputResult.Array()
 	result := rawJSON
 
-	// Directly modify role values for items with "system" role
 	for i := 0; i < len(inputArray); i++ {
-		rolePath := fmt.Sprintf("input.%d.role", i)
-		if gjson.GetBytes(result, rolePath).String() == "system" {
-			result, _ = sjson.SetBytes(result, rolePath, "developer")
+		if inputArray[i].Get("role").String() == "system" {
+			result, _ = sjson.SetBytes(result, fmt.Sprintf("input.%d.role", i), "developer")
 		}
 	}
 
@@ -92,10 +90,15 @@ func normalizeCodexBuiltinTools(rawJSON []byte) []byte {
 
 	tools := gjson.GetBytes(result, "tools")
 	if tools.IsArray() {
-		toolArray := tools.Array()
-		for i := 0; i < len(toolArray); i++ {
-			typePath := fmt.Sprintf("tools.%d.type", i)
-			result = normalizeCodexBuiltinToolAtPath(result, typePath)
+		for i, tool := range tools.Array() {
+			currentType := tool.Get("type").String()
+			if normalizedType := normalizeCodexBuiltinToolType(currentType); normalizedType != "" {
+				typePath := fmt.Sprintf("tools.%d.type", i)
+				if updated, err := sjson.SetBytes(result, typePath, normalizedType); err == nil {
+					log.Debugf("codex responses: normalized builtin tool type at %s from %q to %q", typePath, currentType, normalizedType)
+					result = updated
+				}
+			}
 		}
 	}
 
@@ -103,10 +106,15 @@ func normalizeCodexBuiltinTools(rawJSON []byte) []byte {
 
 	toolChoiceTools := gjson.GetBytes(result, "tool_choice.tools")
 	if toolChoiceTools.IsArray() {
-		toolArray := toolChoiceTools.Array()
-		for i := 0; i < len(toolArray); i++ {
-			typePath := fmt.Sprintf("tool_choice.tools.%d.type", i)
-			result = normalizeCodexBuiltinToolAtPath(result, typePath)
+		for i, tool := range toolChoiceTools.Array() {
+			currentType := tool.Get("type").String()
+			if normalizedType := normalizeCodexBuiltinToolType(currentType); normalizedType != "" {
+				typePath := fmt.Sprintf("tool_choice.tools.%d.type", i)
+				if updated, err := sjson.SetBytes(result, typePath, normalizedType); err == nil {
+					log.Debugf("codex responses: normalized builtin tool type at %s from %q to %q", typePath, currentType, normalizedType)
+					result = updated
+				}
+			}
 		}
 	}
 

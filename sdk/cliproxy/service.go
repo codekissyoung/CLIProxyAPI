@@ -26,6 +26,8 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+const gracefulShutdownTimeout = 30 * time.Second
+
 // Service wraps the proxy server lifecycle so external programs can embed the CLI proxy.
 // It manages the complete lifecycle including authentication, file watching, HTTP server,
 // and integration with various AI service providers.
@@ -486,10 +488,8 @@ func (s *Service) Run(ctx context.Context) error {
 
 	usage.StartDefault(ctx)
 
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer shutdownCancel()
 	defer func() {
-		if err := s.Shutdown(shutdownCtx); err != nil {
+		if err := s.Shutdown(nil); err != nil {
 			log.Errorf("service shutdown returned error: %v", err)
 		}
 	}()
@@ -749,9 +749,8 @@ func (s *Service) Shutdown(ctx context.Context) error {
 	}
 	var shutdownErr error
 	s.shutdownOnce.Do(func() {
-		if ctx == nil {
-			ctx = context.Background()
-		}
+		shutdownCtx, cancel := newGracefulShutdownContext(ctx, gracefulShutdownTimeout)
+		defer cancel()
 
 		// legacy refresh loop removed; only stopping core auth manager below
 
@@ -768,7 +767,7 @@ func (s *Service) Shutdown(ctx context.Context) error {
 			}
 		}
 		if s.wsGateway != nil {
-			if err := s.wsGateway.Stop(ctx); err != nil {
+			if err := s.wsGateway.Stop(shutdownCtx); err != nil {
 				log.Errorf("failed to stop websocket gateway: %v", err)
 				if shutdownErr == nil {
 					shutdownErr = err
@@ -780,7 +779,7 @@ func (s *Service) Shutdown(ctx context.Context) error {
 			s.authQueueStop = nil
 		}
 
-		if errShutdownPprof := s.shutdownPprof(ctx); errShutdownPprof != nil {
+		if errShutdownPprof := s.shutdownPprof(shutdownCtx); errShutdownPprof != nil {
 			log.Errorf("failed to stop pprof server: %v", errShutdownPprof)
 			if shutdownErr == nil {
 				shutdownErr = errShutdownPprof
@@ -790,8 +789,6 @@ func (s *Service) Shutdown(ctx context.Context) error {
 		// no legacy clients to persist
 
 		if s.server != nil {
-			shutdownCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-			defer cancel()
 			if err := s.server.Stop(shutdownCtx); err != nil {
 				log.Errorf("error stopping API server: %v", err)
 				if shutdownErr == nil {
@@ -803,6 +800,23 @@ func (s *Service) Shutdown(ctx context.Context) error {
 		usage.StopDefault()
 	})
 	return shutdownErr
+}
+
+func newGracefulShutdownContext(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout <= 0 {
+		return context.WithCancel(context.Background())
+	}
+
+	if parent != nil {
+		if deadline, ok := parent.Deadline(); ok {
+			remaining := time.Until(deadline)
+			if remaining > 0 && remaining < timeout {
+				return context.WithDeadline(context.Background(), deadline)
+			}
+		}
+	}
+
+	return context.WithTimeout(context.Background(), timeout)
 }
 
 func (s *Service) ensureAuthDir() error {
