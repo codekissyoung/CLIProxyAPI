@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	codexauth "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/codex"
@@ -20,6 +21,7 @@ import (
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v6/sdk/translator"
+	"github.com/router-for-me/CLIProxyAPI/v6/sdk/proxyutil"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -35,6 +37,121 @@ const (
 )
 
 var dataTag = []byte("data:")
+
+// codexTransportCache maps (authID | effectiveProxyURL) to a per-auth
+// *http.Transport. Each auth owns its own connection pool — transports are NOT
+// shared across auths, so from OpenAI's perspective each account keeps a
+// stable, single-owner TCP/TLS footprint that matches a real Codex client.
+// Including effectiveProxyURL in the key means global cfg.ProxyURL hot-reloads
+// route to a fresh transport instead of reusing the old proxy's pool.
+var codexTransportCache sync.Map
+
+// codexMaxIdleConnsPerHost mirrors the concurrency shape of a real Codex TUI
+// session: a primary request plus occasional parallel tool calls. Going much
+// higher (Go's internal connection-pool tuning, or the "gateway" pattern of
+// 64+) would itself be an obvious fingerprint of a multi-tenant proxy.
+const (
+	codexMaxIdleConnsPerHost = 4
+	codexMaxIdleConns        = 8
+)
+
+// codexHTTPClient returns an *http.Client whose Transport is dedicated to the
+// given auth, so connection reuse happens strictly within a single account.
+func codexHTTPClient(ctx context.Context, cfg *config.Config, auth *cliproxyauth.Auth) *http.Client {
+	// Tests inject a RoundTripper via context (httptest); bypass the cache in that case.
+	if rt, ok := ctx.Value("cliproxy.roundtripper").(http.RoundTripper); ok && rt != nil {
+		return &http.Client{Transport: rt}
+	}
+
+	// Without an auth ID we can't key a dedicated pool; fall back to a
+	// freshly-built transport per call rather than leaking one auth's pool
+	// to another via a shared empty key.
+	if auth == nil || auth.ID == "" {
+		return &http.Client{Transport: buildCodexTransport(effectiveProxyURL(cfg, auth))}
+	}
+
+	proxyURL := effectiveProxyURL(cfg, auth)
+	key := auth.ID + "|" + proxyURL
+
+	if v, ok := codexTransportCache.Load(key); ok {
+		return &http.Client{Transport: v.(http.RoundTripper)}
+	}
+
+	transport := buildCodexTransport(proxyURL)
+	actual, _ := codexTransportCache.LoadOrStore(key, transport)
+	return &http.Client{Transport: actual.(http.RoundTripper)}
+}
+
+// effectiveProxyURL resolves the proxy that NewProxyAwareHTTPClient would
+// actually use: auth-level override first, then the global cfg value.
+func effectiveProxyURL(cfg *config.Config, auth *cliproxyauth.Auth) string {
+	if auth != nil {
+		if p := strings.TrimSpace(auth.ProxyURL); p != "" {
+			return p
+		}
+	}
+	if cfg != nil {
+		return strings.TrimSpace(cfg.ProxyURL)
+	}
+	return ""
+}
+
+// buildCodexTransport constructs a tuned *http.Transport for the given proxy URL.
+// Empty proxy means "no explicit proxy" — we clone DefaultTransport so that
+// ProxyFromEnvironment (HTTP_PROXY/HTTPS_PROXY/NO_PROXY), HTTP/2, default dial
+// timeouts, and the TLS session cache are all preserved. This matches what
+// http.DefaultTransport would have done when NewProxyAwareHTTPClient left
+// Transport == nil, and keeps the outbound TLS fingerprint aligned with what a
+// vanilla Go client would produce.
+func buildCodexTransport(proxyURL string) *http.Transport {
+	var transport *http.Transport
+	if proxyURL == "" {
+		if def, ok := http.DefaultTransport.(*http.Transport); ok && def != nil {
+			transport = def.Clone()
+			transport.DialContext = proxyutil.IPv4OnlyDialContext
+		} else {
+			transport = &http.Transport{
+				Proxy:       http.ProxyFromEnvironment,
+				DialContext: proxyutil.IPv4OnlyDialContext,
+			}
+		}
+	} else {
+		built, _, err := proxyutil.BuildHTTPTransport(proxyURL)
+		if err != nil || built == nil {
+			if err != nil {
+				log.Debugf("codex: invalid proxy %q, falling back to direct: %v", proxyURL, err)
+			}
+			transport = proxyutil.NewDirectTransport()
+		} else {
+			transport = built
+		}
+	}
+	tuneCodexTransport(transport)
+	return transport
+}
+
+// tuneCodexTransport sets pool sizes and timeouts tuned for a single Codex
+// account's traffic shape, without introducing values that would themselves
+// be fingerprintable (e.g. huge pools, DisableCompression, DisableKeepAlives).
+func tuneCodexTransport(t *http.Transport) {
+	if t == nil {
+		return
+	}
+	t.ForceAttemptHTTP2 = true
+	t.MaxIdleConnsPerHost = codexMaxIdleConnsPerHost
+	if t.MaxIdleConns == 0 || t.MaxIdleConns > codexMaxIdleConns {
+		t.MaxIdleConns = codexMaxIdleConns
+	}
+	if t.IdleConnTimeout == 0 {
+		t.IdleConnTimeout = 90 * time.Second
+	}
+	if t.TLSHandshakeTimeout == 0 {
+		t.TLSHandshakeTimeout = 10 * time.Second
+	}
+	if t.ExpectContinueTimeout == 0 {
+		t.ExpectContinueTimeout = 1 * time.Second
+	}
+}
 
 // CodexExecutor is a stateless executor for Codex (OpenAI Responses API entrypoint).
 // If api_key is unavailable on auth, it falls back to legacy via ClientAdapter.
@@ -75,7 +192,7 @@ func (e *CodexExecutor) HttpRequest(ctx context.Context, auth *cliproxyauth.Auth
 	if err := e.PrepareRequest(httpReq, auth); err != nil {
 		return nil, err
 	}
-	httpClient := helps.NewProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
+	httpClient := codexHTTPClient(ctx, e.cfg, auth)
 	return httpClient.Do(httpReq)
 }
 
@@ -141,7 +258,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 		AuthType:  authType,
 		AuthValue: authValue,
 	})
-	httpClient := helps.NewProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
+	httpClient := codexHTTPClient(ctx, e.cfg, auth)
 	httpResp, err := httpClient.Do(httpReq)
 	if err != nil {
 		helps.RecordAPIResponseError(ctx, e.cfg, err)
@@ -290,7 +407,7 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 		AuthType:  authType,
 		AuthValue: authValue,
 	})
-	httpClient := helps.NewProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
+	httpClient := codexHTTPClient(ctx, e.cfg, auth)
 	httpResp, err := httpClient.Do(httpReq)
 	if err != nil {
 		helps.RecordAPIResponseError(ctx, e.cfg, err)
@@ -388,7 +505,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 		AuthValue: authValue,
 	})
 
-	httpClient := helps.NewProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
+	httpClient := codexHTTPClient(ctx, e.cfg, auth)
 	httpResp, err := httpClient.Do(httpReq)
 	if err != nil {
 		helps.RecordAPIResponseError(ctx, e.cfg, err)
@@ -421,7 +538,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 			}
 		}()
 		scanner := bufio.NewScanner(httpResp.Body)
-		scanner.Buffer(nil, 52_428_800) // 50MB
+		scanner.Buffer(make([]byte, 32*1024), 52_428_800) // 32KB initial, 50MB max
 		var param any
 		for scanner.Scan() {
 			line := scanner.Bytes()

@@ -720,7 +720,7 @@ func (h *BaseAPIHandler) ExecuteStreamWithAuthManager(ctx context.Context, handl
 					return
 				}
 				if len(chunk.Payload) > 0 {
-					if handlerType == "openai-response" {
+					if handlerType == "openai-response" && !sentPayload {
 						if err := validateSSEDataJSON(chunk.Payload); err != nil {
 							_ = sendErr(&interfaces.ErrorMessage{StatusCode: http.StatusBadGateway, Error: err})
 							return
