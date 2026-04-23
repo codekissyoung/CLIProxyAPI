@@ -41,6 +41,7 @@ go build -o test-output ./cmd/server && rm test-output # Verify compile (REQUIRE
 - `internal/tui/` — Bubbletea terminal UI (`--tui`, `--standalone`)
 - `sdk/cliproxy/` — Embeddable SDK entry (service/builder/watchers/pipeline)
 - `test/` — Cross-module integration tests
+- **Forwarding model**: This is a transparent proxy — the upstream provider should see traffic that looks like a single real client per account, not a multi-tenant gateway. Avoid shared connection pools, large `MaxIdleConnsPerHost` values, `DisableCompression` toggles, or any other knob that would create a fingerprint distinct from a vanilla SDK. When caching transports/clients per auth, key by `auth.ID + effectiveProxyURL` (auth-level proxy first, then `cfg.ProxyURL`) so global proxy hot-reloads route to fresh pools.
 
 ## Code Conventions
 - Keep changes small and simple (KISS)
@@ -58,6 +59,7 @@ go build -o test-output ./cmd/server && rm test-output # Verify compile (REQUIRE
 - Use logrus structured logging; avoid leaking secrets/tokens in logs
 - Avoid panics in HTTP handlers; prefer logged errors and meaningful HTTP status codes
 - Timeouts are allowed only during credential acquisition; after an upstream connection is established, do not set timeouts for any subsequent network behavior. Intentional exceptions that must remain allowed are the Codex websocket liveness deadlines in `internal/runtime/executor/codex_websockets_executor.go`, the wsrelay session deadlines in `internal/wsrelay/session.go`, the management APICall timeout in `internal/api/handlers/management/api_tools.go`, and the `cmd/fetch_antigravity_models` utility timeouts
+- For SSE scanners on streaming bodies, follow the project convention `scanner.Buffer(nil, 52_428_800)`; let bufio's lazy 4KB → 2× growth handle buffer sizing. Don't pre-allocate large initial buffers — every other executor (qwen / openai_compat / claude / iflow / gemini) follows this form.
 
 ## Deployment Notes
 - On this production host, the live CLIProxyAPI service is `cliproxyapi` and runs with `-config /home/iec/deploy/etc/cliproxyapi.yaml`.
