@@ -1,0 +1,27 @@
+[Unit]
+Description=CLIProxyAPI profiler watcher
+After=network-online.target cliproxyapi.service
+Wants=network-online.target cliproxyapi.service
+ConditionPathExists=/home/iec/deploy/etc/cliproxy-profiler.yaml
+
+[Service]
+Type=simple
+User=iec
+WorkingDirectory=/home/iec/deploy
+ExecStart=/home/iec/deploy/bin/cliproxy-profiler -config /home/iec/deploy/etc/cliproxy-profiler.yaml
+Restart=always
+RestartSec=10
+
+# Keep output in journald for operational visibility.
+StandardOutput=journal
+StandardError=journal
+
+# The watcher only needs read access to /proc, the cliproxy config, and its output directory.
+NoNewPrivileges=true
+PrivateTmp=true
+UMask=0077
+Nice=10
+SyslogIdentifier=cliproxy-profiler
+
+[Install]
+WantedBy=multi-user.target

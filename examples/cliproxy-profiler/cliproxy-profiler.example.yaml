@@ -1,0 +1,42 @@
+# Long-running watcher for capturing evidence when cliproxyapi shows abnormal CPU spikes.
+# Copy this file to a deployment-specific location such as:
+#   /home/iec/deploy/etc/cliproxy-profiler.yaml
+# Then update paths as needed.
+
+target:
+  # Match the live cliproxyapi process.
+  comm: cliproxyapi
+  command-substring: /home/iec/deploy/bin/cliproxyapi
+
+  # Read pprof address, auth-dir, and service port from the live cliproxyapi config.
+  cliproxy-config-path: /home/iec/deploy/etc/cliproxyapi.yaml
+
+  # Optional overrides. Leave empty to auto-resolve from cliproxy-config-path.
+  pprof-url: ""
+  request-log-path: ""
+
+sampling:
+  interval: 1s
+  # Start conservatively and lower only if you miss real spikes.
+  burst-threshold-percent: 100
+  sustained-threshold-percent: 60
+  sustained-consecutive-samples: 3
+
+capture:
+  output-dir: /home/iec/deploy/log/cliproxy-profiler
+  cooldown: 10m
+  max-captures-per-hour: 3
+  cpu-profile-seconds: 10
+  request-timeout: 10s
+  log-tail-lines: 120
+  include-heap: true
+  include-goroutine: true
+  include-threadcreate: true
+  include-socket-details: false
+
+retention:
+  max-capture-dirs: 20
+  max-total-size-mb: 1024
+  max-age: 168h
+
+log-level: info
