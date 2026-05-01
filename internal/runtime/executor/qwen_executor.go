@@ -358,7 +358,8 @@ func (e *QwenExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req
 	}
 
 	requestedModel := helps.PayloadRequestedModel(opts, req.Model)
-	body = helps.ApplyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", body, originalTranslated, requestedModel)
+	requestPath := helps.PayloadRequestPath(opts)
+	body = helps.ApplyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", body, originalTranslated, requestedModel, requestPath)
 	body, err = ensureQwenSystemMessage(body)
 	if err != nil {
 		return resp, err
@@ -495,7 +496,8 @@ func (e *QwenExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Aut
 	// }
 	body, _ = sjson.SetBytes(body, "stream_options.include_usage", true)
 	requestedModel := helps.PayloadRequestedModel(opts, req.Model)
-	body = helps.ApplyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", body, originalTranslated, requestedModel)
+	requestPath := helps.PayloadRequestPath(opts)
+	body = helps.ApplyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", body, originalTranslated, requestedModel, requestPath)
 	body, err = ensureQwenSystemMessage(body)
 	if err != nil {
 		return nil, err

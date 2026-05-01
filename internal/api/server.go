@@ -1030,6 +1030,10 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 		auth.SetQuotaCooldownDisabled(cfg.DisableCooling)
 	}
 
+	if oldCfg != nil && oldCfg.DisableImageGeneration != cfg.DisableImageGeneration {
+		log.Infof("disable-image-generation updated: %v -> %v", oldCfg.DisableImageGeneration, cfg.DisableImageGeneration)
+	}
+
 	applySignatureCacheConfig(oldCfg, cfg)
 
 	if s.handlers != nil && s.handlers.AuthManager != nil {
@@ -1117,6 +1121,9 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 	openAICompatCount := 0
 	for i := range cfg.OpenAICompatibility {
 		entry := cfg.OpenAICompatibility[i]
+		if entry.Disabled {
+			continue
+		}
 		openAICompatCount += len(entry.APIKeyEntries)
 	}
 
