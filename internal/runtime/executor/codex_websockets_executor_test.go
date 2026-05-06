@@ -126,9 +126,13 @@ func TestApplyCodexWebsocketHeadersPassesThroughClientIdentityHeaders(t *testing
 		Provider: "codex",
 		Metadata: map[string]any{"email": "user@example.com"},
 	}
+	// UA must contain "Mac OS" — the multi-user Pro hardening force-rewrites
+	// any non-macOS client UA back to the canonical macOS one (and along with
+	// it the Originator), so passthrough only applies for macOS clients.
+	macClientUA := "codex-tui/0.130.0 (Mac OS 14.6.1; arm64) iTerm.app/3.6.9 (codex-tui; 0.130.0)"
 	ctx := contextWithGinHeaders(map[string]string{
 		"Originator":            "Codex Desktop",
-		"User-Agent":            "codex_cli_rs/0.1.0",
+		"User-Agent":            macClientUA,
 		"Version":               "0.115.0-alpha.27",
 		"X-Codex-Turn-Metadata": `{"turn_id":"turn-1"}`,
 		"X-Client-Request-Id":   "019d2233-e240-7162-992d-38df0a2a0e0d",
@@ -140,8 +144,8 @@ func TestApplyCodexWebsocketHeadersPassesThroughClientIdentityHeaders(t *testing
 	if got := headers.Get("Originator"); got != "Codex Desktop" {
 		t.Fatalf("Originator = %s, want %s", got, "Codex Desktop")
 	}
-	if got := headers.Get("User-Agent"); got != "codex_cli_rs/0.1.0" {
-		t.Fatalf("User-Agent = %s, want %s", got, "codex_cli_rs/0.1.0")
+	if got := headers.Get("User-Agent"); got != macClientUA {
+		t.Fatalf("User-Agent = %s, want %s", got, macClientUA)
 	}
 	if got := headers.Get("Version"); got != "0.115.0-alpha.27" {
 		t.Fatalf("Version = %s, want %s", got, "0.115.0-alpha.27")

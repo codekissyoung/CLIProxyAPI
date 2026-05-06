@@ -967,8 +967,21 @@ func applyCodexHeaders(r *http.Request, auth *cliproxyauth.Auth, token string, s
 	misc.EnsureHeader(r.Header, ginHeaders, "X-Codex-Turn-Metadata", "")
 	stripCodexTurnMetadataWorkspaces(r.Header)
 	misc.EnsureHeader(r.Header, ginHeaders, "X-Client-Request-Id", "")
+	isAPIKey := codexAuthUsesAPIKey(auth)
 	cfgUserAgent, _ := codexHeaderDefaults(cfg, auth)
 	ensureHeaderWithConfigPrecedence(r.Header, ginHeaders, "User-Agent", cfgUserAgent, codexUserAgent)
+
+	// Multi-user Pro account hardening: when the UA flowed through from the
+	// client (no admin-set cfg UA) and doesn't look like a real macOS Codex
+	// build, force it back to the canonical macOS UA so teammates running
+	// Linux/Windows clients don't surface a "same account, multiple OS"
+	// signal upstream. Admin-set cfg UAs are respected — they're an explicit
+	// override and the admin owns the consequences.
+	uaForced := false
+	if !isAPIKey && cfgUserAgent == "" && !strings.Contains(r.Header.Get("User-Agent"), "Mac OS") {
+		r.Header.Set("User-Agent", codexUserAgent)
+		uaForced = true
+	}
 
 	if strings.Contains(r.Header.Get("User-Agent"), "Mac OS") {
 		misc.EnsureHeader(r.Header, ginHeaders, "Session_id", uuid.NewString())
@@ -981,15 +994,19 @@ func applyCodexHeaders(r *http.Request, auth *cliproxyauth.Auth, token string, s
 	}
 	r.Header.Set("Connection", "Keep-Alive")
 
-	isAPIKey := false
-	if auth != nil && auth.Attributes != nil {
-		if v := strings.TrimSpace(auth.Attributes["api_key"]); v != "" {
-			isAPIKey = true
+	clientOriginator := strings.TrimSpace(ginHeaders.Get("Originator"))
+	switch {
+	case isAPIKey:
+		if clientOriginator != "" {
+			r.Header.Set("Originator", clientOriginator)
 		}
-	}
-	if originator := strings.TrimSpace(ginHeaders.Get("Originator")); originator != "" {
-		r.Header.Set("Originator", originator)
-	} else if !isAPIKey {
+	case uaForced:
+		// Keep UA and Originator in lockstep — UA=codex-tui paired with a
+		// non-codex-tui Originator is itself a fingerprint.
+		r.Header.Set("Originator", codexOriginator)
+	case clientOriginator != "":
+		r.Header.Set("Originator", clientOriginator)
+	default:
 		r.Header.Set("Originator", codexOriginator)
 	}
 	if !isAPIKey {

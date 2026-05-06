@@ -847,10 +847,20 @@ func applyCodexWebsocketHeaders(ctx context.Context, headers http.Header, auth *
 	misc.EnsureHeader(headers, ginHeaders, "x-client-request-id", "")
 	misc.EnsureHeader(headers, ginHeaders, "x-responsesapi-include-timing-metrics", "")
 	misc.EnsureHeader(headers, ginHeaders, "Version", "")
+	uaForced := false
 	if isAPIKey {
 		ensureHeaderWithPriority(headers, ginHeaders, "User-Agent", "", "")
 	} else {
 		ensureHeaderWithConfigPrecedence(headers, ginHeaders, "User-Agent", cfgUserAgent, codexUserAgent)
+		// Multi-user Pro account hardening: align cross-platform clients to
+		// the canonical macOS UA so a single OAuth account never surfaces as
+		// "same user, multiple OS" upstream. Mirrors applyCodexHeaders. Only
+		// kicks in when admin hasn't set a cfg UA — explicit admin overrides
+		// are respected.
+		if cfgUserAgent == "" && !strings.Contains(headers.Get("User-Agent"), "Mac OS") {
+			headers.Set("User-Agent", codexUserAgent)
+			uaForced = true
+		}
 	}
 
 	betaHeader := strings.TrimSpace(headers.Get("OpenAI-Beta"))
@@ -865,9 +875,18 @@ func applyCodexWebsocketHeaders(ctx context.Context, headers http.Header, auth *
 		ensureHeaderCasePreserved(headers, ginHeaders, "session_id", "", uuid.NewString())
 	}
 	ensureHeaderCasePreserved(headers, ginHeaders, "session_id", "", "")
-	if originator := strings.TrimSpace(ginHeaders.Get("Originator")); originator != "" {
-		headers.Set("Originator", originator)
-	} else if !isAPIKey {
+	clientOriginator := strings.TrimSpace(ginHeaders.Get("Originator"))
+	switch {
+	case isAPIKey:
+		if clientOriginator != "" {
+			headers.Set("Originator", clientOriginator)
+		}
+	case uaForced:
+		// Keep UA and Originator in lockstep when we forced the UA.
+		headers.Set("Originator", codexOriginator)
+	case clientOriginator != "":
+		headers.Set("Originator", clientOriginator)
+	default:
 		headers.Set("Originator", codexOriginator)
 	}
 	if !isAPIKey {
