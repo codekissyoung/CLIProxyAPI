@@ -32,7 +32,7 @@ import (
 )
 
 const (
-	codexUserAgent             = "codex-tui/0.121.0 (Mac OS 26.3.1; arm64) iTerm.app/3.6.9 (codex-tui; 0.121.0)"
+	codexUserAgent             = "codex-tui/0.128.0 (Mac OS 14.5.0; arm64) iTerm.app/3.6.9 (codex-tui; 0.128.0)"
 	codexOriginator            = "codex-tui"
 	codexDefaultImageToolModel = "gpt-image-2"
 )
@@ -914,6 +914,43 @@ func (e *CodexExecutor) cacheHelper(ctx context.Context, from sdktranslator.Form
 	return httpReq, nil
 }
 
+// stripCodexTurnMetadataWorkspaces removes the `workspaces` field from
+// X-Codex-Turn-Metadata so the upstream does not see per-user git remote URLs,
+// local paths, or commit hashes — matching what the Codex Desktop client sends.
+// Non-JSON values and metadata without the field are left untouched. Preserves
+// the original header key casing the client used.
+func stripCodexTurnMetadataWorkspaces(h http.Header) {
+	if h == nil {
+		return
+	}
+	originalKey := ""
+	raw := ""
+	for k, vals := range h {
+		if !strings.EqualFold(k, "X-Codex-Turn-Metadata") {
+			continue
+		}
+		if len(vals) > 0 {
+			originalKey = k
+			raw = vals[0]
+		}
+		break
+	}
+	if raw == "" {
+		return
+	}
+	if !gjson.Valid(raw) {
+		return
+	}
+	if !gjson.Get(raw, "workspaces").Exists() {
+		return
+	}
+	cleaned, err := sjson.Delete(raw, "workspaces")
+	if err != nil {
+		return
+	}
+	h[originalKey] = []string{cleaned}
+}
+
 func applyCodexHeaders(r *http.Request, auth *cliproxyauth.Auth, token string, stream bool, cfg *config.Config) {
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("Authorization", "Bearer "+token)
@@ -928,6 +965,7 @@ func applyCodexHeaders(r *http.Request, auth *cliproxyauth.Auth, token string, s
 	}
 	misc.EnsureHeader(r.Header, ginHeaders, "Version", "")
 	misc.EnsureHeader(r.Header, ginHeaders, "X-Codex-Turn-Metadata", "")
+	stripCodexTurnMetadataWorkspaces(r.Header)
 	misc.EnsureHeader(r.Header, ginHeaders, "X-Client-Request-Id", "")
 	cfgUserAgent, _ := codexHeaderDefaults(cfg, auth)
 	ensureHeaderWithConfigPrecedence(r.Header, ginHeaders, "User-Agent", cfgUserAgent, codexUserAgent)

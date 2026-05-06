@@ -843,6 +843,7 @@ func applyCodexWebsocketHeaders(ctx context.Context, headers http.Header, auth *
 	ensureHeaderWithPriority(headers, ginHeaders, "x-codex-beta-features", cfgBetaFeatures, "")
 	misc.EnsureHeader(headers, ginHeaders, "x-codex-turn-state", "")
 	misc.EnsureHeader(headers, ginHeaders, "x-codex-turn-metadata", "")
+	stripCodexTurnMetadataWorkspaces(headers)
 	misc.EnsureHeader(headers, ginHeaders, "x-client-request-id", "")
 	misc.EnsureHeader(headers, ginHeaders, "x-responsesapi-include-timing-metrics", "")
 	misc.EnsureHeader(headers, ginHeaders, "Version", "")
