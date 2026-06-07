@@ -339,7 +339,7 @@ func normalizeLevels(levels []string) []string {
 // These providers may also support level-based thinking (hybrid models).
 func isBudgetCapableProvider(provider string) bool {
 	switch provider {
-	case "gemini", "gemini-cli", "antigravity", "claude":
+	case "gemini", "gemini-cli", "antigravity", "claude", "qoder":
 		return true
 	default:
 		return false
@@ -357,7 +357,7 @@ func isGeminiFamily(provider string) bool {
 
 func isOpenAIFamily(provider string) bool {
 	switch provider {
-	case "openai", "openai-response", "codex":
+	case "openai", "openai-response", "codex", "xai":
 		return true
 	default:
 		return false
