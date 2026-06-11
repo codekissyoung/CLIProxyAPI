@@ -9,22 +9,10 @@ func TestValidateModelsCatalog_AllowsEmptyOptionalSections(t *testing.T) {
 	data := validTestModelsCatalog()
 	data.Qwen = nil
 	data.IFlow = nil
+	data.CodexPro = nil
 
 	if err := validateModelsCatalog(data); err != nil {
 		t.Fatalf("validateModelsCatalog() error = %v, want nil", err)
-	}
-}
-
-func TestValidateModelsCatalog_StillRequiresCodexSections(t *testing.T) {
-	data := validTestModelsCatalog()
-	data.CodexPro = nil
-
-	err := validateModelsCatalog(data)
-	if err == nil {
-		t.Fatal("validateModelsCatalog() error = nil, want codex-pro validation failure")
-	}
-	if !strings.Contains(err.Error(), "codex-pro section is empty") {
-		t.Fatalf("validateModelsCatalog() error = %v, want codex-pro section is empty", err)
 	}
 }
 
