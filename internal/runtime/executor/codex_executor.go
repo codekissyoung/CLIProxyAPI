@@ -85,8 +85,43 @@ func codexHTTPClient(ctx context.Context, cfg *config.Config, auth *cliproxyauth
 	}
 
 	transport := buildCodexTransport(proxyURL)
-	actual, _ := codexTransportCache.LoadOrStore(key, transport)
+	actual, loaded := codexTransportCache.LoadOrStore(key, transport)
+	if !loaded {
+		// A new key for this auth means its effective proxy changed; retire the
+		// pools it created under previous proxy settings so they don't accumulate.
+		retireStaleCodexTransports(auth.ID, key)
+	}
 	return &http.Client{Transport: actual.(http.RoundTripper)}
+}
+
+// retireStaleCodexTransports removes cached transports belonging to authID
+// except keepKey, closing their idle connections. Entries are keyed by
+// authID|proxyURL, so without this a proxy hot-reload would strand the old
+// pool in the cache forever.
+func retireStaleCodexTransports(authID, keepKey string) {
+	prefix := authID + "|"
+	codexTransportCache.Range(func(k, _ any) bool {
+		key, ok := k.(string)
+		if !ok || key == keepKey || !strings.HasPrefix(key, prefix) {
+			return true
+		}
+		if old, deleted := codexTransportCache.LoadAndDelete(key); deleted {
+			if t, okTransport := old.(*http.Transport); okTransport && t != nil {
+				t.CloseIdleConnections()
+			}
+		}
+		return true
+	})
+}
+
+// EvictCodexTransportsForAuthID drops every cached transport belonging to the
+// given auth and closes its idle connections. Called when an auth is removed.
+func EvictCodexTransportsForAuthID(authID string) {
+	authID = strings.TrimSpace(authID)
+	if authID == "" {
+		return
+	}
+	retireStaleCodexTransports(authID, "")
 }
 
 // effectiveProxyURL resolves the proxy that NewProxyAwareHTTPClient would
@@ -160,20 +195,29 @@ func tuneCodexTransport(t *http.Transport) {
 	}
 }
 
+// codexOutputItemsRetainLimit bounds how many bytes of response.output_item.done
+// payloads ExecuteStream retains for patching an empty response.completed output.
+// The patch is a best-effort repair; past this budget the retained items are
+// released instead of holding the whole stream in memory.
+const codexOutputItemsRetainLimit = 16 << 20 // 16 MiB
+
 // Streamed Codex responses may emit response.output_item.done events while leaving
 // response.completed.response.output empty. Keep the stream path aligned with the
 // already-patched non-stream path by reconstructing response.output from those items.
-func collectCodexOutputItemDone(eventData []byte, outputItemsByIndex map[int64][]byte, outputItemsFallback *[][]byte) {
+// It returns the number of bytes retained from this event.
+func collectCodexOutputItemDone(eventData []byte, outputItemsByIndex map[int64][]byte, outputItemsFallback *[][]byte) int {
 	itemResult := gjson.GetBytes(eventData, "item")
 	if !itemResult.Exists() || itemResult.Type != gjson.JSON {
-		return
+		return 0
 	}
+	item := []byte(itemResult.Raw)
 	outputIndexResult := gjson.GetBytes(eventData, "output_index")
 	if outputIndexResult.Exists() {
-		outputItemsByIndex[outputIndexResult.Int()] = []byte(itemResult.Raw)
-		return
+		outputItemsByIndex[outputIndexResult.Int()] = item
+		return len(item)
 	}
-	*outputItemsFallback = append(*outputItemsFallback, []byte(itemResult.Raw))
+	*outputItemsFallback = append(*outputItemsFallback, item)
+	return len(item)
 }
 
 func patchCodexCompletedOutput(eventData []byte, outputItemsByIndex map[int64][]byte, outputItemsFallback [][]byte) []byte {
@@ -1284,6 +1328,8 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 		var param any
 		outputItemsByIndex := make(map[int64][]byte)
 		var outputItemsFallback [][]byte
+		outputItemsRetained := 0
+		outputItemsDropped := false
 		for scanner.Scan() {
 			line := applyCodexIdentityConfuseResponsePayload(scanner.Bytes(), identityState)
 			helps.AppendAPIResponseChunk(ctx, e.cfg, line)
@@ -1303,7 +1349,15 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 				}
 				switch gjson.GetBytes(data, "type").String() {
 				case "response.output_item.done":
-					collectCodexOutputItemDone(data, outputItemsByIndex, &outputItemsFallback)
+					if !outputItemsDropped {
+						outputItemsRetained += collectCodexOutputItemDone(data, outputItemsByIndex, &outputItemsFallback)
+						if outputItemsRetained > codexOutputItemsRetainLimit {
+							outputItemsByIndex = make(map[int64][]byte)
+							outputItemsFallback = nil
+							outputItemsDropped = true
+							log.Debugf("codex executor: retained output items exceeded %d bytes, skipping response.completed output patch", codexOutputItemsRetainLimit)
+						}
+					}
 				case "response.completed":
 					if detail, ok := helps.ParseCodexUsage(data); ok {
 						reporter.Publish(ctx, detail)

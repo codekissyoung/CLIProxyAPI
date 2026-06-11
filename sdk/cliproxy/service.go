@@ -745,6 +745,7 @@ func (s *Service) applyCoreAuthRemoval(ctx context.Context, id string) {
 	s.coreManager.Remove(ctx, id)
 	if strings.EqualFold(provider, "codex") {
 		executor.CloseCodexWebsocketSessionsForAuthID(id, "auth_removed")
+		executor.EvictCodexTransportsForAuthID(id)
 	}
 	s.syncPluginRuntime(ctx)
 }
