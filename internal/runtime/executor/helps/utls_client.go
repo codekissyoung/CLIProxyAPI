@@ -152,6 +152,23 @@ func (f *fallbackRoundTripper) RoundTrip(req *http.Request) (*http.Response, err
 	return f.fallback.RoundTrip(req)
 }
 
+// NewUtlsRoundTripper builds a long-lived RoundTripper that applies the utls
+// Chrome TLS fingerprint to protected hosts (api.anthropic.com, chatgpt.com) and
+// routes everything else through fallback. Unlike NewUtlsHTTPClient it returns
+// the RoundTripper directly so callers that maintain their own per-auth client
+// cache (e.g. the Codex executor) can hold onto it and reuse its connection
+// pool across requests for a single account. fallback is used for non-protected
+// hosts; when nil it defaults to http.DefaultTransport.
+func NewUtlsRoundTripper(proxyURL string, fallback http.RoundTripper) http.RoundTripper {
+	if fallback == nil {
+		fallback = http.DefaultTransport
+	}
+	return &fallbackRoundTripper{
+		utls:     newUtlsRoundTripper(strings.TrimSpace(proxyURL)),
+		fallback: fallback,
+	}
+}
+
 // NewUtlsHTTPClient creates an HTTP client using utls Chrome TLS fingerprint.
 // Use this for provider requests that need a Chrome-like TLS fingerprint.
 // Falls back to standard transport for non-HTTPS requests.

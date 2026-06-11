@@ -62,6 +62,16 @@ const (
 	codexMaxIdleConns        = 8
 )
 
+// codexCachedTransport bundles the RoundTripper handed to callers with the
+// underlying tuned *http.Transport. The RoundTripper applies the utls Chrome
+// fingerprint to chatgpt.com (so the upstream TLS handshake matches a real
+// Codex client rather than Go's default), while base is retained so idle
+// connections can be closed when the entry is retired.
+type codexCachedTransport struct {
+	rt   http.RoundTripper
+	base *http.Transport
+}
+
 // codexHTTPClient returns an *http.Client whose Transport is dedicated to the
 // given auth, so connection reuse happens strictly within a single account.
 func codexHTTPClient(ctx context.Context, cfg *config.Config, auth *cliproxyauth.Auth) *http.Client {
@@ -74,14 +84,14 @@ func codexHTTPClient(ctx context.Context, cfg *config.Config, auth *cliproxyauth
 	// freshly-built transport per call rather than leaking one auth's pool
 	// to another via a shared empty key.
 	if auth == nil || auth.ID == "" {
-		return &http.Client{Transport: buildCodexTransport(effectiveProxyURL(cfg, auth))}
+		return &http.Client{Transport: buildCodexTransport(effectiveProxyURL(cfg, auth)).rt}
 	}
 
 	proxyURL := effectiveProxyURL(cfg, auth)
 	key := auth.ID + "|" + proxyURL
 
 	if v, ok := codexTransportCache.Load(key); ok {
-		return &http.Client{Transport: v.(http.RoundTripper)}
+		return &http.Client{Transport: v.(*codexCachedTransport).rt}
 	}
 
 	transport := buildCodexTransport(proxyURL)
@@ -91,7 +101,7 @@ func codexHTTPClient(ctx context.Context, cfg *config.Config, auth *cliproxyauth
 		// pools it created under previous proxy settings so they don't accumulate.
 		retireStaleCodexTransports(auth.ID, key)
 	}
-	return &http.Client{Transport: actual.(http.RoundTripper)}
+	return &http.Client{Transport: actual.(*codexCachedTransport).rt}
 }
 
 // retireStaleCodexTransports removes cached transports belonging to authID
@@ -106,8 +116,8 @@ func retireStaleCodexTransports(authID, keepKey string) {
 			return true
 		}
 		if old, deleted := codexTransportCache.LoadAndDelete(key); deleted {
-			if t, okTransport := old.(*http.Transport); okTransport && t != nil {
-				t.CloseIdleConnections()
+			if cached, okCached := old.(*codexCachedTransport); okCached && cached != nil && cached.base != nil {
+				cached.base.CloseIdleConnections()
 			}
 		}
 		return true
@@ -138,14 +148,16 @@ func effectiveProxyURL(cfg *config.Config, auth *cliproxyauth.Auth) string {
 	return ""
 }
 
-// buildCodexTransport constructs a tuned *http.Transport for the given proxy URL.
-// Empty proxy means "no explicit proxy" — we clone DefaultTransport so that
-// ProxyFromEnvironment (HTTP_PROXY/HTTPS_PROXY/NO_PROXY), HTTP/2, default dial
-// timeouts, and the TLS session cache are all preserved. This matches what
-// http.DefaultTransport would have done when NewProxyAwareHTTPClient left
-// Transport == nil, and keeps the outbound TLS fingerprint aligned with what a
-// vanilla Go client would produce.
-func buildCodexTransport(proxyURL string) *http.Transport {
+// buildCodexTransport constructs a per-auth transport for the given proxy URL.
+// Requests to chatgpt.com go through a utls Chrome fingerprint so the upstream
+// TLS handshake matches a real Codex client instead of Go's default ClientHello;
+// any other host falls back to a tuned standard *http.Transport.
+//
+// Empty proxy means "no explicit proxy" — the fallback clones DefaultTransport so
+// that ProxyFromEnvironment (HTTP_PROXY/HTTPS_PROXY/NO_PROXY), HTTP/2, default
+// dial timeouts, and the TLS session cache are all preserved. The utls layer is
+// proxy-aware via the same proxy URL.
+func buildCodexTransport(proxyURL string) *codexCachedTransport {
 	var transport *http.Transport
 	if proxyURL == "" {
 		if def, ok := http.DefaultTransport.(*http.Transport); ok && def != nil {
@@ -169,7 +181,10 @@ func buildCodexTransport(proxyURL string) *http.Transport {
 		}
 	}
 	tuneCodexTransport(transport)
-	return transport
+	return &codexCachedTransport{
+		rt:   helps.NewUtlsRoundTripper(proxyURL, transport),
+		base: transport,
+	}
 }
 
 // tuneCodexTransport sets pool sizes and timeouts tuned for a single Codex

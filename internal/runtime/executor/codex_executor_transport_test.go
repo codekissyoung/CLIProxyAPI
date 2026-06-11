@@ -18,8 +18,15 @@ func TestCodexHTTPClient_RetiresStaleProxyTransports(t *testing.T) {
 		t.Fatal("codexHTTPClient returned nil client")
 	}
 	keyA := auth.ID + "|" + cfgA.ProxyURL
-	if _, ok := codexTransportCache.Load(keyA); !ok {
+	cachedA, ok := codexTransportCache.Load(keyA)
+	if !ok {
 		t.Fatalf("expected cached transport for key %q", keyA)
+	}
+	// The cached entry must carry both the utls-wrapped RoundTripper handed to
+	// callers and the underlying *http.Transport used for idle-conn cleanup.
+	entry, okEntry := cachedA.(*codexCachedTransport)
+	if !okEntry || entry == nil || entry.rt == nil || entry.base == nil {
+		t.Fatalf("cached entry has unexpected shape: %#v", cachedA)
 	}
 
 	cfgB := &config.Config{SDKConfig: config.SDKConfig{ProxyURL: "http://127.0.0.1:18081"}}
