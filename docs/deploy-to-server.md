@@ -15,7 +15,7 @@
   auths/                        # OAuth 认证文件（codex-*.json）
   auths/logs/main.log           # 服务日志
   static/management.html        # 管理面板（自动下载）
-  server-build.sh               # 一键构建部署脚本
+  server-deploy-all.sh          # 多机统一发布脚本（在控制机执行）
 ```
 
 ## 首次部署
@@ -126,15 +126,18 @@ https://admin.ieasycode.cc/jiovaonfgiudiaj323u48934tjhnfdigfidbnxibcv/cliproxy/m
 
 ## 日常更新
 
-在服务器上执行：
+在**控制机**（`cheery-taste`）上执行,统一发布到清单中的所有目标机（含本机 self 与 `ice-server`）：
 
 ```bash
 cd ~/CLIProxyAPI
 git pull
-./server-build.sh
+./server-deploy-all.sh                 # dry-run，先看将要做什么
+./server-deploy-all.sh --execute       # 真正发布到所有目标机
+./server-deploy-all.sh --execute --target ice-server   # 只发某一台
+./server-deploy-all.sh --list          # 打印目标机清单
 ```
 
-脚本会自动完成：编译 → 版本化部署 → 清理旧版本（保留 10 个） → 重启 → 健康检查。
+脚本会自动完成：控制机编译一次 → 分发到每台目标机 → 版本化部署 → 重启 → 健康检查 → 失败时按机自动回滚 → 清理旧版本（保留 10 个）。新增机器只需在脚本的 `TARGETS` 数组追加一行。
 
 ## 常用命令
 

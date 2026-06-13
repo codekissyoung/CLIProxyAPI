@@ -13,7 +13,7 @@ go run ./cmd/server # Run dev server
 go test ./... # Run all tests
 go test -v -run TestName ./path/to/pkg # Run single test
 go build -o test-output ./cmd/server && rm test-output # Verify compile (REQUIRED after changes)
-./server-build.sh # Production deploy on glittering-book: build -> versioned ~/deploy/bin symlink -> restart -> /healthz check -> auto rollback on failure
+./server-deploy-all.sh # Multi-host production deploy: dry-run by default; add --execute (and optional --target <name>) to build once, distribute to every host in TARGETS, then per-host symlink -> restart -> /healthz check -> auto rollback on failure
 ```
 - Common flags: `--config <path>`, `--tui`, `--standalone`, `--local-model`, `--no-browser`, `--oauth-callback-port <port>`
 
@@ -64,4 +64,4 @@ go build -o test-output ./cmd/server && rm test-output # Verify compile (REQUIRE
 ## Deployment Notes
 - On this production host, the live CLIProxyAPI service is `cliproxyapi` and runs with `-config /home/iec/deploy/etc/cliproxyapi.yaml`.
 - Live auth files/logs are under `~/deploy/auths/`; CLIProxyAPI runtime logs are typically tailed from `~/deploy/auths/logs/main.log`.
-- `server-build.sh` is the preferred production deployment entrypoint in this repo. It reads the health-check port from `~/deploy/etc/cliproxyapi.yaml`, updates `~/deploy/bin/cliproxyapi`, restarts `cliproxyapi`, and rolls back to the previous symlink target automatically if restart or `/healthz` fails.
+- `server-deploy-all.sh` is the preferred production deployment entrypoint in this repo. It builds the binary once on the control host, then for every host in its `TARGETS` list (currently `cheery-taste`/self and `ice-server`) distributes the artifact, swaps `~/deploy/bin/cliproxyapi`, restarts `cliproxyapi`, reads the health-check port from `~/deploy/etc/cliproxyapi.yaml`, and rolls back that host to its previous symlink target automatically if restart or `/healthz` fails. It is dry-run by default — pass `--execute` to deploy (optionally `--target <name>` for a single host, `--list` to print the host inventory). Add a new host by appending one line to `TARGETS`.

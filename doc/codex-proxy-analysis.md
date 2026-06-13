@@ -5,7 +5,7 @@
 ## 部署情况
 
 - 服务：`cliproxyapi`，单实例，监听 `8317` 端口
-- 部署脚本：`./server-build.sh`（编译 + 带时间戳部署 + 重启 + 健康检查 + 自动回滚）
+- 部署脚本：`./server-deploy-all.sh --execute`（多机统一发布：编译一次 + 分发 + 带时间戳部署 + 重启 + 健康检查 + 自动回滚；默认 dry-run）
 - Auth 文件目录：`/home/iec/deploy/auths/`
 - 导入脚本：`scripts/import_codex_ios_tokens.py`
 
