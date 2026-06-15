@@ -2244,6 +2244,12 @@ func logCodexUpstreamError(ctx context.Context, ident interface{ Identifier() st
 	})
 }
 
+// codexContextWindowRejectPercent is the fraction of the model context window
+// at or above which the pre-flight guard rejects a request. 98% leaves a small
+// 2% headroom so the guard only fires on requests that are virtually certain to
+// be rejected upstream.
+const codexContextWindowRejectPercent = 98
+
 // codexContextWindowFor returns the model's context window (in tokens) from the
 // model registry, or 0 when unknown. baseModel must be the suffix-stripped name.
 func codexContextWindowFor(baseModel string) int {
@@ -2279,7 +2285,13 @@ func checkCodexContextWindow(ctx context.Context, ident interface{ Identifier() 
 	if err != nil {
 		return nil
 	}
-	if int(inputTokens) < window {
+	// Reject at 98% of the window: a request this close to the limit leaves
+	// essentially no room for the response and is virtually certain to be
+	// rejected upstream, so failing fast saves a wasted round-trip. The 2%
+	// headroom is small enough that it does not kill realistically-completable
+	// requests.
+	effectiveLimit := window * codexContextWindowRejectPercent / 100
+	if int(inputTokens) < effectiveLimit {
 		return nil
 	}
 
@@ -2301,7 +2313,7 @@ func checkCodexContextWindow(ctx context.Context, ident interface{ Identifier() 
 		AuthID:    authID,
 		AuthLabel: authLabel,
 		Status:    http.StatusBadRequest,
-		ErrorMsg:  fmt.Sprintf("pre-flight context window guard: input ~%d tokens >= window %d", inputTokens, window),
+		ErrorMsg:  fmt.Sprintf("pre-flight context window guard: input ~%d tokens >= %d%% of window %d (limit %d)", inputTokens, codexContextWindowRejectPercent, window, effectiveLimit),
 		SessionID: sessionID,
 		Transport: "guard",
 		ReqBytes:  len(body),

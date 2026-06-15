@@ -55,3 +55,28 @@ func TestCheckCodexContextWindowFailsOpenOnUnknownModel(t *testing.T) {
 		t.Fatalf("unknown model should fail open, got %v", err)
 	}
 }
+
+func TestCheckCodexContextWindowRejectsAt98Percent(t *testing.T) {
+	// gpt-5.5 window = 272000; 98% = 266560. A request at ~270000 tokens is
+	// below the full window but above the 98% threshold, so it must be rejected.
+	words := strings.Repeat("token ", 270000)
+	body := codexInputBody(words)
+
+	err := checkCodexContextWindow(context.Background(), guardIdent{}, "gpt-5.5", body, nil, "codex:test")
+	if err == nil {
+		t.Fatal("request at ~270k tokens (>98% of 272000) should be rejected")
+	}
+	if !strings.Contains(err.Error(), "context_too_large") {
+		t.Fatalf("expected context_too_large, got %v", err)
+	}
+}
+
+func TestCheckCodexContextWindowAllowsBelow98Percent(t *testing.T) {
+	// ~200000 tokens is well under 98% of 272000 (=266560); must pass.
+	words := strings.Repeat("token ", 200000)
+	body := codexInputBody(words)
+
+	if err := checkCodexContextWindow(context.Background(), guardIdent{}, "gpt-5.5", body, nil, "codex:test"); err != nil {
+		t.Fatalf("request comfortably under the threshold should pass, got %v", err)
+	}
+}
