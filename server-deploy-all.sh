@@ -25,6 +25,7 @@ log_error() { echo "[ERROR] $1" >&2; }
 TARGETS=(
     "cheery-taste|self|103.91.219.75"
     "ice-server|ice-server|103.91.219.4"
+    "ice-server-2|ice-server-2|45.59.131.169"
 )
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
