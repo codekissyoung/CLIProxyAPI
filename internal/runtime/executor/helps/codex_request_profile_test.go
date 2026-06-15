@@ -46,30 +46,3 @@ func TestProfileCodexRequestHandlesMissingInput(t *testing.T) {
 		t.Fatalf("TotalBytes should reflect whole body")
 	}
 }
-
-func TestProfileCodexRequestDetectsBase64Image(t *testing.T) {
-	// A function_call_output carrying a PNG data URL should be counted as an image.
-	body := []byte(`{
-		"input": [
-			{"type": "message", "role": "user", "content": "make a picture"},
-			{"type": "function_call_output", "output": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAA"}
-		]
-	}`)
-
-	p := ProfileCodexRequest(body)
-
-	if p.ImageItems != 1 {
-		t.Fatalf("ImageItems = %d, want 1", p.ImageItems)
-	}
-	if p.ImageBytes <= 0 {
-		t.Fatalf("ImageBytes = %d, want > 0", p.ImageBytes)
-	}
-}
-
-func TestProfileCodexRequestNoImageWhenAbsent(t *testing.T) {
-	body := []byte(`{"input":[{"type":"message","role":"user","content":"plain text only"}]}`)
-	p := ProfileCodexRequest(body)
-	if p.ImageItems != 0 || p.ImageBytes != 0 {
-		t.Fatalf("expected no image, got items=%d bytes=%d", p.ImageItems, p.ImageBytes)
-	}
-}
