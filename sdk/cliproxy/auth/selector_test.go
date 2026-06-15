@@ -789,6 +789,45 @@ func TestExtractSessionID_CodexSessionIDHeader(t *testing.T) {
 	}
 }
 
+func TestExtractSessionID_CodexTurnMetadataHeader(t *testing.T) {
+	t.Parallel()
+
+	headers := make(http.Header)
+	headers.Set("X-Codex-Turn-Metadata", `{"session_id":"f5544b7c-773b-5429-91cc-048c2e15aac9","turn_id":"abc"}`)
+
+	got := ExtractSessionID(headers, nil, nil)
+	want := "codex:f5544b7c-773b-5429-91cc-048c2e15aac9"
+	if got != want {
+		t.Errorf("ExtractSessionID() from X-Codex-Turn-Metadata = %q, want %q", got, want)
+	}
+}
+
+func TestExtractSessionID_CodexTurnMetadataBody(t *testing.T) {
+	t.Parallel()
+
+	payload := []byte(`{"model":"gpt-5.5","client_metadata":{"x-codex-turn-metadata":"{\"session_id\":\"body-sess-9\"}"},"input":[]}`)
+
+	got := ExtractSessionID(nil, payload, nil)
+	want := "codex:body-sess-9"
+	if got != want {
+		t.Errorf("ExtractSessionID() from body turn-metadata = %q, want %q", got, want)
+	}
+}
+
+func TestExtractSessionID_CodexTurnMetadataPriorityOverClientRequestID(t *testing.T) {
+	t.Parallel()
+
+	headers := make(http.Header)
+	headers.Set("X-Codex-Turn-Metadata", `{"session_id":"turn-sess"}`)
+	headers.Set("X-Client-Request-Id", "pi-req")
+
+	got := ExtractSessionID(headers, nil, nil)
+	want := "codex:turn-sess"
+	if got != want {
+		t.Errorf("turn-metadata should win over X-Client-Request-Id, got %q want %q", got, want)
+	}
+}
+
 func TestExtractSessionID_ClientRequestIDHeader(t *testing.T) {
 	t.Parallel()
 

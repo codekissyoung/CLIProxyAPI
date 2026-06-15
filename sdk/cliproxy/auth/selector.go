@@ -585,6 +585,27 @@ func ExtractSessionID(headers http.Header, payload []byte, metadata map[string]a
 
 // extractSessionIDs returns (primaryID, fallbackID) for session affinity.
 // primaryID: full hash including assistant response (stable after first turn)
+// codexTurnMetadataSessionID extracts the codex session_id embedded as JSON in
+// the X-Codex-Turn-Metadata header, or mirrored in the request body field
+// client_metadata.x-codex-turn-metadata. Returns "" when absent or unparseable.
+func codexTurnMetadataSessionID(headers http.Header, payload []byte) string {
+	if headers != nil {
+		if raw := strings.TrimSpace(headers.Get("X-Codex-Turn-Metadata")); raw != "" {
+			if sid := strings.TrimSpace(gjson.Get(raw, "session_id").String()); sid != "" {
+				return sid
+			}
+		}
+	}
+	if len(payload) > 0 {
+		if raw := strings.TrimSpace(gjson.GetBytes(payload, "client_metadata.x-codex-turn-metadata").String()); raw != "" {
+			if sid := strings.TrimSpace(gjson.Get(raw, "session_id").String()); sid != "" {
+				return sid
+			}
+		}
+	}
+	return ""
+}
+
 // fallbackID: short hash without assistant (used to inherit binding from first turn)
 func extractSessionIDs(headers http.Header, payload []byte, metadata map[string]any) (string, string) {
 	// 1. metadata.user_id with Claude Code session format (highest priority)
@@ -621,6 +642,16 @@ func extractSessionIDs(headers http.Header, payload []byte, metadata map[string]
 		if sid := headers.Get("Session_id"); sid != "" {
 			return "codex:" + sid, ""
 		}
+	}
+
+	// 3b. Codex X-Codex-Turn-Metadata: the codex CLI does not send a standalone
+	// Session-Id header — the stable session_id is embedded as JSON inside the
+	// X-Codex-Turn-Metadata header (and mirrored in the body field
+	// client_metadata.x-codex-turn-metadata). Without this, every codex request
+	// falls through to the message-hash fallback below instead of using the real
+	// stable session id, weakening affinity.
+	if sid := codexTurnMetadataSessionID(headers, payload); sid != "" {
+		return "codex:" + sid, ""
 	}
 
 	// 4. X-Client-Request-Id header (PI)
