@@ -2284,9 +2284,12 @@ func checkCodexContextWindow(ctx context.Context, ident interface{ Identifier() 
 	}
 
 	authID, authLabel := codexErrorAuthInfo(auth)
+	// Keep the "context window" phrase (downstream relays key off it) and embed the
+	// model name and limit in a stable, machine-extractable form so a relay can
+	// surface "<model> supports a maximum input of <N> tokens" to the end user.
 	msg := fmt.Sprintf(
-		"Your input exceeds the context window of this model. Please adjust your input and try again. (input ~%d tokens, model window %d tokens)",
-		inputTokens, window,
+		"Your input exceeds the context window of this model. Model %q supports a maximum input of %d tokens, but this request is ~%d tokens. Please shorten the conversation and try again.",
+		baseModel, window, inputTokens,
 	)
 	errBody := fmt.Sprintf(
 		`{"error":{"message":%q,"type":"invalid_request_error","code":"context_too_large"}}`,
