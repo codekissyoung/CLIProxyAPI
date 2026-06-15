@@ -699,6 +699,46 @@ func LogUpstreamError(entry *log.Entry, provider, model, authID, authLabel strin
 	}).Warn("upstream provider error")
 }
 
+// UpstreamErrorDetail carries the optional context that helps triage an upstream
+// failure by session and request size (e.g. distinguishing a context_too_large
+// caused by an oversized session history from a transient 5xx).
+type UpstreamErrorDetail struct {
+	Provider  string
+	Model     string
+	AuthID    string
+	AuthLabel string
+	Status    int
+	ErrorMsg  string
+	SessionID string // session affinity key (with source prefix), empty if unknown
+	Transport string // "http" or "ws" — which executor path produced the error
+	ReqBytes  int    // size of the upstream request body, 0 if unknown
+}
+
+// LogUpstreamErrorDetail emits a single structured warn line for an upstream
+// error, enriched with session, transport and request size so all errors can be
+// aggregated by account/session for optimization. Fields that are empty/zero are
+// omitted to keep noise down.
+func LogUpstreamErrorDetail(entry *log.Entry, d UpstreamErrorDetail) {
+	fields := log.Fields{
+		"provider":    d.Provider,
+		"model":       d.Model,
+		"auth_id":     d.AuthID,
+		"auth_label":  d.AuthLabel,
+		"http_status": d.Status,
+		"error_msg":   d.ErrorMsg,
+	}
+	if d.SessionID != "" {
+		fields["session"] = d.SessionID
+	}
+	if d.Transport != "" {
+		fields["transport"] = d.Transport
+	}
+	if d.ReqBytes > 0 {
+		fields["req_bytes"] = d.ReqBytes
+	}
+	entry.WithFields(fields).Warn("upstream provider error")
+}
+
 // MarkCreditsUsed flags the request as having used AI credits for billing.
 func MarkCreditsUsed(ctx context.Context) {
 	ginCtx := ginContextFrom(ctx)

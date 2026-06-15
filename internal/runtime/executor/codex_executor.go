@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -1014,6 +1015,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	if err != nil {
 		return resp, err
 	}
+	helps.LogCodexRequestProfile(ctx, "codex-http-execute", baseModel, upstreamBody)
 	applyCodexHeaders(httpReq, auth, apiKey, true, e.cfg)
 	applyCodexIdentityConfuseHeaders(httpReq.Header, &identityState)
 	var authID, authLabel, authType, authValue string
@@ -1056,7 +1058,17 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 		errSummary := helps.SummarizeErrorBody(httpResp.Header.Get("Content-Type"), b)
 		entry := helps.LogWithRequestID(ctx)
 		entry.Debugf("request error, error status: %d, error message: %s", httpResp.StatusCode, errSummary)
-		helps.LogUpstreamError(entry, e.Identifier(), req.Model, authID, authLabel, httpResp.StatusCode, errSummary)
+		helps.LogUpstreamErrorDetail(entry, helps.UpstreamErrorDetail{
+			Provider:  e.Identifier(),
+			Model:     req.Model,
+			AuthID:    authID,
+			AuthLabel: authLabel,
+			Status:    httpResp.StatusCode,
+			ErrorMsg:  errSummary,
+			SessionID: cliproxyauth.ExtractSessionID(opts.Headers, upstreamBody, opts.Metadata),
+			Transport: "http",
+			ReqBytes:  len(upstreamBody),
+		})
 		err = newCodexStatusErr(httpResp.StatusCode, b)
 		return resp, err
 	}
@@ -1188,6 +1200,7 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 	if err != nil {
 		return resp, err
 	}
+	helps.LogCodexRequestProfile(ctx, "codex-http-compact", baseModel, upstreamBody)
 	applyCodexHeaders(httpReq, auth, apiKey, false, e.cfg)
 	applyCodexIdentityConfuseHeaders(httpReq.Header, &identityState)
 	var authID, authLabel, authType, authValue string
@@ -1227,7 +1240,17 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 		errSummary := helps.SummarizeErrorBody(httpResp.Header.Get("Content-Type"), b)
 		entry := helps.LogWithRequestID(ctx)
 		entry.Debugf("request error, error status: %d, error message: %s", httpResp.StatusCode, errSummary)
-		helps.LogUpstreamError(entry, e.Identifier(), req.Model, authID, authLabel, httpResp.StatusCode, errSummary)
+		helps.LogUpstreamErrorDetail(entry, helps.UpstreamErrorDetail{
+			Provider:  e.Identifier(),
+			Model:     req.Model,
+			AuthID:    authID,
+			AuthLabel: authLabel,
+			Status:    httpResp.StatusCode,
+			ErrorMsg:  errSummary,
+			SessionID: cliproxyauth.ExtractSessionID(opts.Headers, upstreamBody, opts.Metadata),
+			Transport: "http",
+			ReqBytes:  len(upstreamBody),
+		})
 		err = newCodexStatusErr(httpResp.StatusCode, b)
 		return resp, err
 	}
@@ -1304,6 +1327,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	if err != nil {
 		return nil, err
 	}
+	helps.LogCodexRequestProfile(ctx, "codex-http-stream", baseModel, upstreamBody)
 	applyCodexHeaders(httpReq, auth, apiKey, true, e.cfg)
 	applyCodexIdentityConfuseHeaders(httpReq.Header, &identityState)
 	var authID, authLabel, authType, authValue string
@@ -1349,7 +1373,17 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 		errSummary := helps.SummarizeErrorBody(httpResp.Header.Get("Content-Type"), data)
 		entry := helps.LogWithRequestID(ctx)
 		entry.Debugf("request error, error status: %d, error message: %s", httpResp.StatusCode, errSummary)
-		helps.LogUpstreamError(entry, e.Identifier(), req.Model, authID, authLabel, httpResp.StatusCode, errSummary)
+		helps.LogUpstreamErrorDetail(entry, helps.UpstreamErrorDetail{
+			Provider:  e.Identifier(),
+			Model:     req.Model,
+			AuthID:    authID,
+			AuthLabel: authLabel,
+			Status:    httpResp.StatusCode,
+			ErrorMsg:  errSummary,
+			SessionID: cliproxyauth.ExtractSessionID(opts.Headers, upstreamBody, opts.Metadata),
+			Transport: "http",
+			ReqBytes:  len(upstreamBody),
+		})
 		err = newCodexStatusErr(httpResp.StatusCode, data)
 		return nil, err
 	}
@@ -2153,4 +2187,49 @@ func (e *CodexExecutor) resolveCodexConfig(auth *cliproxyauth.Auth) *config.Code
 		}
 	}
 	return nil
+}
+
+// codexErrorAuthInfo extracts auth identity fields for error logging.
+func codexErrorAuthInfo(auth *cliproxyauth.Auth) (authID, authLabel string) {
+	if auth != nil {
+		authID = auth.ID
+		authLabel = auth.Label
+	}
+	return authID, authLabel
+}
+
+// codexErrorStatus extracts an HTTP-like status code from an error when it
+// exposes StatusCode() (statusErr and its wrappers do). Returns 0 otherwise.
+func codexErrorStatus(err error) int {
+	type statusCoder interface{ StatusCode() int }
+	var sc statusCoder
+	if errors.As(err, &sc) {
+		return sc.StatusCode()
+	}
+	return 0
+}
+
+// logCodexUpstreamError emits one structured warn line for a codex upstream
+// error, enriched with session, transport and request size so all errors can be
+// aggregated by account/session. transport is "http" or "ws".
+func logCodexUpstreamError(ctx context.Context, ident interface{ Identifier() string }, transport, model string, auth *cliproxyauth.Auth, opts cliproxyexecutor.Options, upstreamBody []byte, err error) {
+	if err == nil {
+		return
+	}
+	authID, authLabel := codexErrorAuthInfo(auth)
+	sessionID := cliproxyauth.ExtractSessionID(opts.Headers, upstreamBody, opts.Metadata)
+	if sessionID == "" {
+		sessionID = cliproxyauth.ExtractSessionID(opts.Headers, opts.OriginalRequest, opts.Metadata)
+	}
+	helps.LogUpstreamErrorDetail(helps.LogWithRequestID(ctx), helps.UpstreamErrorDetail{
+		Provider:  ident.Identifier(),
+		Model:     model,
+		AuthID:    authID,
+		AuthLabel: authLabel,
+		Status:    codexErrorStatus(err),
+		ErrorMsg:  err.Error(),
+		SessionID: sessionID,
+		Transport: transport,
+		ReqBytes:  len(upstreamBody),
+	})
 }

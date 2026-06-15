@@ -228,6 +228,7 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 	clientBody := body
 	var identityState codexIdentityConfuseState
 	upstreamBody, identityState := applyCodexIdentityConfuseBody(e.cfg, auth, originalPayloadSource, body)
+	helps.LogCodexRequestProfile(ctx, "codex-ws-execute", baseModel, upstreamBody)
 	reporter.SetTranslatedReasoningEffort(clientBody, to.String())
 	wsHeaders = applyCodexWebsocketHeaders(ctx, wsHeaders, auth, apiKey, e.cfg)
 	applyCodexIdentityConfuseHeaders(wsHeaders, &identityState)
@@ -375,6 +376,7 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 				e.invalidateUpstreamConn(sess, conn, "upstream_error", wsErr)
 			}
 			helps.RecordAPIWebsocketError(ctx, e.cfg, "upstream_error", wsErr)
+			logCodexUpstreamError(ctx, e, "ws", baseModel, auth, opts, upstreamBody, wsErr)
 			return resp, wsErr
 		}
 
@@ -447,6 +449,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 	clientBody := body
 	var identityState codexIdentityConfuseState
 	upstreamBody, identityState := applyCodexIdentityConfuseBody(e.cfg, auth, userPayload, body)
+	helps.LogCodexRequestProfile(ctx, "codex-ws-stream", baseModel, upstreamBody)
 	reporter.SetTranslatedReasoningEffort(clientBody, to.String())
 	wsHeaders = applyCodexWebsocketHeaders(ctx, wsHeaders, auth, apiKey, e.cfg)
 	applyCodexIdentityConfuseHeaders(wsHeaders, &identityState)
@@ -642,6 +645,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 				terminateReason = "upstream_error"
 				terminateErr = wsErr
 				helps.RecordAPIWebsocketError(ctx, e.cfg, "upstream_error", wsErr)
+				logCodexUpstreamError(ctx, e, "ws", baseModel, auth, opts, upstreamBody, wsErr)
 				reporter.PublishFailure(ctx, wsErr)
 				if sess != nil {
 					e.invalidateUpstreamConn(sess, conn, "upstream_error", wsErr)

@@ -483,9 +483,18 @@ func NewSessionAffinitySelectorWithConfig(cfg SessionAffinityConfig) *SessionAff
 func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, auths []*Auth) (*Auth, error) {
 	entry := selectorLogEntry(ctx)
 	primaryID, fallbackID := extractSessionIDs(opts.Headers, opts.OriginalRequest, opts.Metadata)
+	// Session parse trace: primaryID/fallbackID carry a source prefix (claude:/header:/
+	// codex:/clientreq:/user:/conv:/msg:) so the log shows BOTH which source matched and
+	// the full (untruncated) value. Tail this together with the cache hit/miss lines below
+	// to follow the whole "session parse -> auth pick" chain.
+	entry.Debugf("session-affinity: parsed session | provider=%s model=%s primary=%q fallback=%q", provider, model, primaryID, fallbackID)
 	if primaryID == "" {
-		entry.Debugf("session-affinity: no session ID extracted, falling back to default selector | provider=%s model=%s", provider, model)
-		return s.fallback.Pick(ctx, provider, model, opts, auths)
+		auth, err := s.fallback.Pick(ctx, provider, model, opts, auths)
+		if err != nil {
+			return nil, err
+		}
+		entry.Debugf("session-affinity: no session ID extracted, used default selector | provider=%s model=%s auth=%s", provider, model, auth.ID)
+		return auth, nil
 	}
 
 	now := time.Now()
