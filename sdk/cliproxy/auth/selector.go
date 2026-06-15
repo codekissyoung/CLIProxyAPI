@@ -508,7 +508,7 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 	if cachedAuthID, ok := s.cache.GetAndRefresh(cacheKey); ok {
 		for _, auth := range available {
 			if auth.ID == cachedAuthID {
-				entry.Infof("session-affinity: cache hit | session=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), auth.ID, provider, model)
+				entry.Infof("session-affinity: cache hit | session=%s auth=%s provider=%s model=%s", primaryID, auth.ID, provider, model)
 				return auth, nil
 			}
 		}
@@ -518,7 +518,7 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 			return nil, err
 		}
 		s.cache.Set(cacheKey, auth.ID)
-		entry.Infof("session-affinity: cache hit but auth unavailable, reselected | session=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), auth.ID, provider, model)
+		entry.Infof("session-affinity: cache hit but auth unavailable, reselected | session=%s auth=%s provider=%s model=%s", primaryID, auth.ID, provider, model)
 		return auth, nil
 	}
 
@@ -528,7 +528,7 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 			for _, auth := range available {
 				if auth.ID == cachedAuthID {
 					s.cache.Set(cacheKey, auth.ID)
-					entry.Infof("session-affinity: fallback cache hit | session=%s fallback=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), truncateSessionID(fallbackID), auth.ID, provider, model)
+					entry.Infof("session-affinity: fallback cache hit | session=%s fallback=%s auth=%s provider=%s model=%s", primaryID, fallbackID, auth.ID, provider, model)
 					return auth, nil
 				}
 			}
@@ -540,7 +540,7 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 		return nil, err
 	}
 	s.cache.Set(cacheKey, auth.ID)
-	entry.Infof("session-affinity: cache miss, new binding | session=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), auth.ID, provider, model)
+	entry.Infof("session-affinity: cache miss, new binding | session=%s auth=%s provider=%s model=%s", primaryID, auth.ID, provider, model)
 	return auth, nil
 }
 
@@ -552,14 +552,6 @@ func selectorLogEntry(ctx context.Context) *log.Entry {
 		return log.WithField("request_id", reqID)
 	}
 	return log.NewEntry(log.StandardLogger())
-}
-
-// truncateSessionID shortens session ID for logging (first 8 chars + "...")
-func truncateSessionID(id string) string {
-	if len(id) <= 20 {
-		return id
-	}
-	return id[:8] + "..."
 }
 
 // Stop releases resources held by the selector.
