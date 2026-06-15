@@ -20,7 +20,6 @@ import (
 	internalcache "github.com/router-for-me/CLIProxyAPI/v7/internal/cache"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/misc"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/signature"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/thinking"
@@ -1017,9 +1016,6 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 		return resp, err
 	}
 	helps.LogCodexRequestProfile(ctx, "codex-http-execute", baseModel, upstreamBody)
-	if guardErr := checkCodexContextWindow(ctx, e, baseModel, upstreamBody, auth, cliproxyauth.ExtractSessionID(opts.Headers, upstreamBody, opts.Metadata)); guardErr != nil {
-		return resp, guardErr
-	}
 	applyCodexHeaders(httpReq, auth, apiKey, true, e.cfg)
 	applyCodexIdentityConfuseHeaders(httpReq.Header, &identityState)
 	var authID, authLabel, authType, authValue string
@@ -1205,9 +1201,6 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 		return resp, err
 	}
 	helps.LogCodexRequestProfile(ctx, "codex-http-compact", baseModel, upstreamBody)
-	if guardErr := checkCodexContextWindow(ctx, e, baseModel, upstreamBody, auth, cliproxyauth.ExtractSessionID(opts.Headers, upstreamBody, opts.Metadata)); guardErr != nil {
-		return resp, guardErr
-	}
 	applyCodexHeaders(httpReq, auth, apiKey, false, e.cfg)
 	applyCodexIdentityConfuseHeaders(httpReq.Header, &identityState)
 	var authID, authLabel, authType, authValue string
@@ -1335,9 +1328,6 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 		return nil, err
 	}
 	helps.LogCodexRequestProfile(ctx, "codex-http-stream", baseModel, upstreamBody)
-	if guardErr := checkCodexContextWindow(ctx, e, baseModel, upstreamBody, auth, cliproxyauth.ExtractSessionID(opts.Headers, upstreamBody, opts.Metadata)); guardErr != nil {
-		return nil, guardErr
-	}
 	applyCodexHeaders(httpReq, auth, apiKey, true, e.cfg)
 	applyCodexIdentityConfuseHeaders(httpReq.Header, &identityState)
 	var authID, authLabel, authType, authValue string
@@ -2242,81 +2232,4 @@ func logCodexUpstreamError(ctx context.Context, ident interface{ Identifier() st
 		Transport: transport,
 		ReqBytes:  len(upstreamBody),
 	})
-}
-
-// codexContextWindowRejectPercent is the fraction of the model context window
-// at or above which the pre-flight guard rejects a request. 98% leaves a small
-// 2% headroom so the guard only fires on requests that are virtually certain to
-// be rejected upstream.
-const codexContextWindowRejectPercent = 98
-
-// codexContextWindowFor returns the model's context window (in tokens) from the
-// model registry, or 0 when unknown. baseModel must be the suffix-stripped name.
-func codexContextWindowFor(baseModel string) int {
-	info := registry.LookupStaticModelInfo(baseModel)
-	if info == nil {
-		return 0
-	}
-	return info.ContextLength
-}
-
-// checkCodexContextWindow returns a non-nil error when the request input alone
-// already meets or exceeds the model's context window, so it is guaranteed to be
-// rejected upstream with context_too_large. Returning the error lets the caller
-// fail fast without a wasted upstream round-trip.
-//
-// It is deliberately conservative (fail-open): if the window is unknown, the
-// tokenizer fails, or token counting fails, it returns nil and lets the request
-// proceed. The guard only fires on the zero-false-positive line — input tokens
-// >= the full window — never on a speculative margin, so it cannot kill a
-// request the upstream would have accepted.
-//
-// body must be the codex-format ("input" array) upstream body.
-func checkCodexContextWindow(ctx context.Context, ident interface{ Identifier() string }, baseModel string, body []byte, auth *cliproxyauth.Auth, sessionID string) error {
-	window := codexContextWindowFor(baseModel)
-	if window <= 0 {
-		return nil
-	}
-	enc, err := tokenizerForCodexModel(baseModel)
-	if err != nil {
-		return nil
-	}
-	inputTokens, err := countCodexInputTokens(enc, body)
-	if err != nil {
-		return nil
-	}
-	// Reject at 98% of the window: a request this close to the limit leaves
-	// essentially no room for the response and is virtually certain to be
-	// rejected upstream, so failing fast saves a wasted round-trip. The 2%
-	// headroom is small enough that it does not kill realistically-completable
-	// requests.
-	effectiveLimit := window * codexContextWindowRejectPercent / 100
-	if int(inputTokens) < effectiveLimit {
-		return nil
-	}
-
-	authID, authLabel := codexErrorAuthInfo(auth)
-	// Keep the "context window" phrase (downstream relays key off it) and embed the
-	// model name and limit in a stable, machine-extractable form so a relay can
-	// surface "<model> supports a maximum input of <N> tokens" to the end user.
-	msg := fmt.Sprintf(
-		"Your input exceeds the context window of this model. Model %q supports a maximum input of %d tokens, but this request is ~%d tokens. Please shorten the conversation and try again.",
-		baseModel, window, inputTokens,
-	)
-	errBody := fmt.Sprintf(
-		`{"error":{"message":%q,"type":"invalid_request_error","code":"context_too_large"}}`,
-		msg,
-	)
-	helps.LogUpstreamErrorDetail(helps.LogWithRequestID(ctx), helps.UpstreamErrorDetail{
-		Provider:  ident.Identifier(),
-		Model:     baseModel,
-		AuthID:    authID,
-		AuthLabel: authLabel,
-		Status:    http.StatusBadRequest,
-		ErrorMsg:  fmt.Sprintf("pre-flight context window guard: input ~%d tokens >= %d%% of window %d (limit %d)", inputTokens, codexContextWindowRejectPercent, window, effectiveLimit),
-		SessionID: sessionID,
-		Transport: "guard",
-		ReqBytes:  len(body),
-	})
-	return newCodexStatusErr(http.StatusBadRequest, []byte(errBody))
 }

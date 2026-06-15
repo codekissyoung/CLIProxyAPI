@@ -229,9 +229,6 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 	var identityState codexIdentityConfuseState
 	upstreamBody, identityState := applyCodexIdentityConfuseBody(e.cfg, auth, originalPayloadSource, body)
 	helps.LogCodexRequestProfile(ctx, "codex-ws-execute", baseModel, upstreamBody)
-	if guardErr := checkCodexContextWindow(ctx, e, baseModel, upstreamBody, auth, cliproxyauth.ExtractSessionID(opts.Headers, upstreamBody, opts.Metadata)); guardErr != nil {
-		return resp, guardErr
-	}
 	reporter.SetTranslatedReasoningEffort(clientBody, to.String())
 	wsHeaders = applyCodexWebsocketHeaders(ctx, wsHeaders, auth, apiKey, e.cfg)
 	applyCodexIdentityConfuseHeaders(wsHeaders, &identityState)
@@ -453,9 +450,6 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 	var identityState codexIdentityConfuseState
 	upstreamBody, identityState := applyCodexIdentityConfuseBody(e.cfg, auth, userPayload, body)
 	helps.LogCodexRequestProfile(ctx, "codex-ws-stream", baseModel, upstreamBody)
-	if guardErr := checkCodexContextWindow(ctx, e, baseModel, upstreamBody, auth, cliproxyauth.ExtractSessionID(opts.Headers, upstreamBody, opts.Metadata)); guardErr != nil {
-		return nil, guardErr
-	}
 	reporter.SetTranslatedReasoningEffort(clientBody, to.String())
 	wsHeaders = applyCodexWebsocketHeaders(ctx, wsHeaders, auth, apiKey, e.cfg)
 	applyCodexIdentityConfuseHeaders(wsHeaders, &identityState)
