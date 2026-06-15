@@ -20,6 +20,7 @@ import (
 	internalcache "github.com/router-for-me/CLIProxyAPI/v7/internal/cache"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/misc"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/signature"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/thinking"
@@ -1016,6 +1017,9 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 		return resp, err
 	}
 	helps.LogCodexRequestProfile(ctx, "codex-http-execute", baseModel, upstreamBody)
+	if guardErr := checkCodexContextWindow(ctx, e, baseModel, upstreamBody, auth, cliproxyauth.ExtractSessionID(opts.Headers, upstreamBody, opts.Metadata)); guardErr != nil {
+		return resp, guardErr
+	}
 	applyCodexHeaders(httpReq, auth, apiKey, true, e.cfg)
 	applyCodexIdentityConfuseHeaders(httpReq.Header, &identityState)
 	var authID, authLabel, authType, authValue string
@@ -1201,6 +1205,9 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 		return resp, err
 	}
 	helps.LogCodexRequestProfile(ctx, "codex-http-compact", baseModel, upstreamBody)
+	if guardErr := checkCodexContextWindow(ctx, e, baseModel, upstreamBody, auth, cliproxyauth.ExtractSessionID(opts.Headers, upstreamBody, opts.Metadata)); guardErr != nil {
+		return resp, guardErr
+	}
 	applyCodexHeaders(httpReq, auth, apiKey, false, e.cfg)
 	applyCodexIdentityConfuseHeaders(httpReq.Header, &identityState)
 	var authID, authLabel, authType, authValue string
@@ -1328,6 +1335,9 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 		return nil, err
 	}
 	helps.LogCodexRequestProfile(ctx, "codex-http-stream", baseModel, upstreamBody)
+	if guardErr := checkCodexContextWindow(ctx, e, baseModel, upstreamBody, auth, cliproxyauth.ExtractSessionID(opts.Headers, upstreamBody, opts.Metadata)); guardErr != nil {
+		return nil, guardErr
+	}
 	applyCodexHeaders(httpReq, auth, apiKey, true, e.cfg)
 	applyCodexIdentityConfuseHeaders(httpReq.Header, &identityState)
 	var authID, authLabel, authType, authValue string
@@ -2232,4 +2242,66 @@ func logCodexUpstreamError(ctx context.Context, ident interface{ Identifier() st
 		Transport: transport,
 		ReqBytes:  len(upstreamBody),
 	})
+}
+
+// codexContextWindowFor returns the model's context window (in tokens) from the
+// model registry, or 0 when unknown. baseModel must be the suffix-stripped name.
+func codexContextWindowFor(baseModel string) int {
+	info := registry.LookupStaticModelInfo(baseModel)
+	if info == nil {
+		return 0
+	}
+	return info.ContextLength
+}
+
+// checkCodexContextWindow returns a non-nil error when the request input alone
+// already meets or exceeds the model's context window, so it is guaranteed to be
+// rejected upstream with context_too_large. Returning the error lets the caller
+// fail fast without a wasted upstream round-trip.
+//
+// It is deliberately conservative (fail-open): if the window is unknown, the
+// tokenizer fails, or token counting fails, it returns nil and lets the request
+// proceed. The guard only fires on the zero-false-positive line — input tokens
+// >= the full window — never on a speculative margin, so it cannot kill a
+// request the upstream would have accepted.
+//
+// body must be the codex-format ("input" array) upstream body.
+func checkCodexContextWindow(ctx context.Context, ident interface{ Identifier() string }, baseModel string, body []byte, auth *cliproxyauth.Auth, sessionID string) error {
+	window := codexContextWindowFor(baseModel)
+	if window <= 0 {
+		return nil
+	}
+	enc, err := tokenizerForCodexModel(baseModel)
+	if err != nil {
+		return nil
+	}
+	inputTokens, err := countCodexInputTokens(enc, body)
+	if err != nil {
+		return nil
+	}
+	if int(inputTokens) < window {
+		return nil
+	}
+
+	authID, authLabel := codexErrorAuthInfo(auth)
+	msg := fmt.Sprintf(
+		"Your input exceeds the context window of this model. Please adjust your input and try again. (input ~%d tokens, model window %d tokens)",
+		inputTokens, window,
+	)
+	errBody := fmt.Sprintf(
+		`{"error":{"message":%q,"type":"invalid_request_error","code":"context_too_large"}}`,
+		msg,
+	)
+	helps.LogUpstreamErrorDetail(helps.LogWithRequestID(ctx), helps.UpstreamErrorDetail{
+		Provider:  ident.Identifier(),
+		Model:     baseModel,
+		AuthID:    authID,
+		AuthLabel: authLabel,
+		Status:    http.StatusBadRequest,
+		ErrorMsg:  fmt.Sprintf("pre-flight context window guard: input ~%d tokens >= window %d", inputTokens, window),
+		SessionID: sessionID,
+		Transport: "guard",
+		ReqBytes:  len(body),
+	})
+	return newCodexStatusErr(http.StatusBadRequest, []byte(errBody))
 }
