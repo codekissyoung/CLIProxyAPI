@@ -1016,6 +1016,9 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 		return resp, err
 	}
 	helps.LogCodexRequestProfile(ctx, "codex-http-execute", baseModel, upstreamBody)
+	if blockErr, blocked := codexContextRejectBlocked(ctx, e, "http", baseModel, auth, opts, upstreamBody); blocked {
+		return resp, blockErr
+	}
 	applyCodexHeaders(httpReq, auth, apiKey, true, e.cfg)
 	applyCodexIdentityConfuseHeaders(httpReq.Header, &identityState)
 	var authID, authLabel, authType, authValue string
@@ -1069,6 +1072,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 			Transport: "http",
 			ReqBytes:  len(upstreamBody),
 		})
+		codexContextRejectRecord(upstreamBody, b)
 		err = newCodexStatusErr(httpResp.StatusCode, b)
 		return resp, err
 	}
@@ -1201,6 +1205,9 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 		return resp, err
 	}
 	helps.LogCodexRequestProfile(ctx, "codex-http-compact", baseModel, upstreamBody)
+	if blockErr, blocked := codexContextRejectBlocked(ctx, e, "http", baseModel, auth, opts, upstreamBody); blocked {
+		return resp, blockErr
+	}
 	applyCodexHeaders(httpReq, auth, apiKey, false, e.cfg)
 	applyCodexIdentityConfuseHeaders(httpReq.Header, &identityState)
 	var authID, authLabel, authType, authValue string
@@ -1251,6 +1258,7 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 			Transport: "http",
 			ReqBytes:  len(upstreamBody),
 		})
+		codexContextRejectRecord(upstreamBody, b)
 		err = newCodexStatusErr(httpResp.StatusCode, b)
 		return resp, err
 	}
@@ -1328,6 +1336,9 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 		return nil, err
 	}
 	helps.LogCodexRequestProfile(ctx, "codex-http-stream", baseModel, upstreamBody)
+	if blockErr, blocked := codexContextRejectBlocked(ctx, e, "http", baseModel, auth, opts, upstreamBody); blocked {
+		return nil, blockErr
+	}
 	applyCodexHeaders(httpReq, auth, apiKey, true, e.cfg)
 	applyCodexIdentityConfuseHeaders(httpReq.Header, &identityState)
 	var authID, authLabel, authType, authValue string
@@ -1384,6 +1395,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 			Transport: "http",
 			ReqBytes:  len(upstreamBody),
 		})
+		codexContextRejectRecord(upstreamBody, data)
 		err = newCodexStatusErr(httpResp.StatusCode, data)
 		return nil, err
 	}
@@ -2232,4 +2244,51 @@ func logCodexUpstreamError(ctx context.Context, ident interface{ Identifier() st
 		Transport: transport,
 		ReqBytes:  len(upstreamBody),
 	})
+}
+
+// codexContextRejectCache remembers request fingerprints the upstream has
+// already rejected for being over the context window, so an identical retry can
+// be failed fast without another upstream round-trip. TTL-bounded; a request
+// whose content changes at all gets a new fingerprint and is not blocked.
+var codexContextRejectCache = helps.NewCodexContextRejectCache(10 * time.Minute)
+
+// codexContextRejectBlocked reports whether this exact request body was recently
+// rejected upstream for context length. When true, returns a ready-to-send
+// context_too_large error so the caller can fail fast.
+func codexContextRejectBlocked(ctx context.Context, ident interface{ Identifier() string }, transport, model string, auth *cliproxyauth.Auth, opts cliproxyexecutor.Options, body []byte) (error, bool) {
+	fp := helps.CodexContextFingerprint(body)
+	if fp == "" {
+		return nil, false
+	}
+	if !codexContextRejectCache.Blocked(fp, time.Now()) {
+		return nil, false
+	}
+	msg := "Your input exceeds the context window of this model. This exact request was already rejected for being too large; please shorten the conversation and try again."
+	errBody := fmt.Sprintf(`{"error":{"message":%q,"type":"invalid_request_error","code":"context_too_large"}}`, msg)
+	authID, authLabel := codexErrorAuthInfo(auth)
+	sessionID := cliproxyauth.ExtractSessionID(opts.Headers, body, opts.Metadata)
+	helps.LogUpstreamErrorDetail(helps.LogWithRequestID(ctx), helps.UpstreamErrorDetail{
+		Provider:  ident.Identifier(),
+		Model:     model,
+		AuthID:    authID,
+		AuthLabel: authLabel,
+		Status:    http.StatusBadRequest,
+		ErrorMsg:  "context_too_large retry blocked: identical request previously rejected upstream",
+		SessionID: sessionID,
+		Transport: transport + "-retry-block",
+		ReqBytes:  len(body),
+	})
+	return newCodexStatusErr(http.StatusBadRequest, []byte(errBody)), true
+}
+
+// codexContextRejectRecord records the request fingerprint when the upstream
+// error body indicates a context-length rejection, so identical retries can be
+// short-circuited. No-op for any other error.
+func codexContextRejectRecord(body, errorResponseBody []byte) {
+	if !codexTerminalErrorIsContextLength(errorResponseBody) {
+		return
+	}
+	if fp := helps.CodexContextFingerprint(body); fp != "" {
+		codexContextRejectCache.Record(fp, time.Now())
+	}
 }
