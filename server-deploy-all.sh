@@ -1,17 +1,18 @@
 #!/bin/bash
-# CLIProxyAPI - 多机统一发布脚本（控制机集中编排）
+# CLIProxyAPI - multi-host release script from the control host
 #
-# 在控制机（本机）构建一次二进制产物，分发到清单中的每台目标机，
-# 逐台切软链 + 重启 + healthz 健康检查；某台失败则自动回滚到该机原版本。
-# 各台目标机的配置文件（cliproxyapi.yaml）不在此脚本同步，由各机自管。
+# Build the binary once on the control host, distribute it to every target,
+# switch the release symlink, restart the service, and verify /healthz. A
+# failed host rolls itself back to its previous symlink target.
+# Target host config files are not synchronized by this script.
 #
-# 用法:
-#   ./server-deploy-all.sh                 # dry-run，仅打印将要执行的操作（默认）
-#   ./server-deploy-all.sh --execute       # 真正发布到清单中所有目标机
-#   ./server-deploy-all.sh --execute --target ice-server   # 只发某一台
-#   ./server-deploy-all.sh --list          # 打印目标机清单
+# Usage:
+#   ./server-deploy-all.sh                 # dry-run; only print the plan
+#   ./server-deploy-all.sh --execute       # deploy to every target
+#   ./server-deploy-all.sh --execute --target ice-server   # deploy one target
+#   ./server-deploy-all.sh --list          # print target inventory
 #
-# 目标机通过 SSH 别名访问，需在 ~/.ssh/config 中可达；控制机用本地 self 标识。
+# Targets use SSH aliases from ~/.ssh/config; self means the local control host.
 
 set -euo pipefail
 
@@ -19,9 +20,9 @@ log_info()  { echo "[INFO] $1"; }
 log_warn()  { echo "[WARN] $1"; }
 log_error() { echo "[ERROR] $1" >&2; }
 
-# ── 目标机清单 ──────────────────────────────────────────────
-# 每项: "<显示名>|<SSH别名或 self>|<IP>"
-# self 表示控制机本身（本地执行，不走 SSH）。新增机器只需加一行。
+# ── Target inventory ────────────────────────────────────────
+# Format: "<display-name>|<SSH alias or self>|<IP>"
+# Add a host by appending one line.
 TARGETS=(
     "cheery-taste|self|103.91.219.75"
     "ice-server|ice-server|103.91.219.4"
@@ -63,7 +64,7 @@ while [[ "$#" -gt 0 ]]; do
     esac
 done
 
-# ── 1. 构建一次产物 ─────────────────────────────────────────
+# ── 1. Build one artifact ───────────────────────────────────
 mkdir -p "$BUILD_TMP"
 trap 'rm -rf "$BUILD_TMP"' EXIT
 
@@ -82,14 +83,23 @@ ARTIFACT="$BUILD_TMP/$BIN_NAME"
 log_info "   ✓ 构建完成: $BIN_NAME ($(du -h "$ARTIFACT" | cut -f1))"
 echo ""
 
-# ── 远程/本地执行封装 ────────────────────────────────────────
-# run_on <ssh> <command...>  —— self 走本地 bash -c，否则走 ssh
+# ── Local/remote command helpers ────────────────────────────
+# run_on <ssh> <command...> runs simple commands; remote stdin is detached.
 run_on() {
     local ssh="$1"; shift
     if [[ "$ssh" == "self" ]]; then
-        bash -c "$*"
+        "$@"
     else
-        ssh "${SSH_OPTS[@]}" "$ssh" "$*"
+        ssh -n "${SSH_OPTS[@]}" "$ssh" "$@"
+    fi
+}
+
+run_script_on() {
+    local ssh="$1"; shift
+    if [[ "$ssh" == "self" ]]; then
+        "$@"
+    else
+        ssh "${SSH_OPTS[@]}" "$ssh" "$@"
     fi
 }
 
@@ -103,8 +113,31 @@ copy_to() {
     fi
 }
 
-# 目标机上执行的部署逻辑（切软链 + 重启 + healthz + 失败回滚）。
-# 作为脚本字符串通过 stdin 传给目标机的 bash，参数: <bin_name> <keep>
+read_release_link() {
+    local ssh="$1"
+    local link_path="$BIN_DIR/cliproxyapi"
+    if [[ "$ssh" == "self" ]]; then
+        readlink "$link_path" 2>/dev/null || true
+    else
+        ssh -n "${SSH_OPTS[@]}" "$ssh" readlink "$link_path" 2>/dev/null || true
+    fi
+}
+
+verify_release_link() {
+    local name="$1" ssh="$2" expected="$3"
+    local actual
+
+    actual="$(read_release_link "$ssh")"
+    if [[ "$actual" != "$expected" ]]; then
+        log_error "   ✗ [$name] 软链校验失败: cliproxyapi -> ${actual:-<missing>}，预期 $expected"
+        return 1
+    fi
+
+    log_info "   ✓ [$name] 软链校验通过: cliproxyapi -> $expected"
+}
+
+# Target-host deployment logic, passed to bash over stdin.
+# Arguments: <bin_name> <keep>
 remote_deploy_script() {
     cat <<'REMOTE'
 set -euo pipefail
@@ -137,7 +170,7 @@ rollback() {
     sudo systemctl restart "$SERVICE_NAME"
 }
 
-# 产物已由控制机 scp 到 $BIN_DIR/$BIN_NAME
+# The control host has already copied the artifact to $BIN_DIR/$BIN_NAME.
 [ -f "$BIN_DIR/$BIN_NAME" ] || { echo "[ERROR]    ✗ 未找到已分发的产物: $BIN_DIR/$BIN_NAME"; exit 1; }
 chmod +x "$BIN_DIR/$BIN_NAME"
 ln -sfn "$BIN_NAME" "$BIN_DIR/cliproxyapi"
@@ -155,13 +188,13 @@ else
     if rollback && wait_for_health; then echo "[ERROR]    ✗ 已回滚到 $PREVIOUS_TARGET"; else echo "[ERROR]    ✗ 回滚也失败"; fi
     exit 1
 fi
-# 清理旧版本，保留最近 N 个
+# Keep only the latest N versioned binaries.
 ls -t "$BIN_DIR/cliproxyapi."* 2>/dev/null | tail -n +$((KEEP+1)) | xargs -r rm -f
 echo "[INFO]    ✓ 完成（保留最近 $KEEP 个版本）"
 REMOTE
 }
 
-# ── 2. 逐台分发 + 部署 ──────────────────────────────────────
+# ── 2. Distribute and deploy host by host ───────────────────
 log_info "2. 分发到目标机..."
 FAILED=()
 DEPLOYED=()
@@ -180,8 +213,8 @@ for entry in "${TARGETS[@]}"; do
         continue
     fi
 
-    # 可达性 + bin 目录
-    if ! run_on "$ssh" "mkdir -p '$BIN_DIR'"; then
+    # Connectivity and bin directory preflight.
+    if ! run_on "$ssh" mkdir -p "$BIN_DIR"; then
         log_error "   ✗ [$name] 不可达或 bin 目录创建失败，跳过"
         FAILED+=("$name")
         continue
@@ -195,15 +228,21 @@ for entry in "${TARGETS[@]}"; do
     fi
 
     log_info "   切软链 + 重启 + 健康检查..."
-    if run_on "$ssh" "bash -s -- '$BIN_NAME' '$KEEP_RELEASES'" <<< "$(remote_deploy_script)"; then
-        DEPLOYED+=("$name")
-    else
+    if ! run_script_on "$ssh" bash -s -- "$BIN_NAME" "$KEEP_RELEASES" <<< "$(remote_deploy_script)"; then
         log_error "   ✗ [$name] 部署失败（已尝试在该机回滚）"
         FAILED+=("$name")
+        continue
     fi
+
+    if ! verify_release_link "$name" "$ssh" "$BIN_NAME"; then
+        FAILED+=("$name")
+        continue
+    fi
+
+    DEPLOYED+=("$name")
 done
 
-# ── 3. 汇总 ─────────────────────────────────────────────────
+# ── 3. Summary ──────────────────────────────────────────────
 echo ""
 echo "========================================"
 if [[ "$EXECUTE" != 1 ]]; then
