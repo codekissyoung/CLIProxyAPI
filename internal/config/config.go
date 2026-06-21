@@ -23,6 +23,7 @@ const (
 	DefaultPanelGitHubRepository = "https://github.com/router-for-me/Cli-Proxy-API-Management-Center"
 	DefaultPprofAddr             = "127.0.0.1:8316"
 	DefaultAuthDir               = "~/.cli-proxy-api"
+	DefaultLogsMaxTotalSizeMB    = 5120
 )
 
 // Config represents the application's configuration, loaded from a YAML file.
@@ -62,7 +63,8 @@ type Config struct {
 	LoggingToFile bool `yaml:"logging-to-file" json:"logging-to-file"`
 
 	// LogsMaxTotalSizeMB limits the total size (in MB) of log files under the logs directory.
-	// When exceeded, the oldest log files are deleted until within the limit. Set to 0 to disable.
+	// When exceeded, the oldest log files are deleted until within the limit. Defaults to
+	// DefaultLogsMaxTotalSizeMB. Set to 0 to disable.
 	LogsMaxTotalSizeMB int `yaml:"logs-max-total-size-mb" json:"logs-max-total-size-mb"`
 
 	// ErrorLogsMaxFiles limits the number of error log files retained when request logging is disabled.
@@ -690,7 +692,7 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 	// Set defaults before unmarshal so that absent keys keep defaults.
 	cfg.Host = "" // Default empty: binds to all interfaces (IPv4 + IPv6)
 	cfg.LoggingToFile = false
-	cfg.LogsMaxTotalSizeMB = 0
+	cfg.LogsMaxTotalSizeMB = DefaultLogsMaxTotalSizeMB
 	cfg.ErrorLogsMaxFiles = 10
 	cfg.UsageStatisticsEnabled = false
 	cfg.RedisUsageQueueRetentionSeconds = 60

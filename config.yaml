@@ -42,7 +42,7 @@ commercial-mode: true
 # 日志写入文件而非 stdout
 logging-to-file: true
 # 日志目录总大小上限（MB），0 = 不限制
-logs-max-total-size-mb: 0
+logs-max-total-size-mb: 5120
 # 请求日志关闭时保留的错误日志文件数量上限，0 = 不限制
 error-logs-max-files: 100
 
