@@ -2,7 +2,6 @@ package test
 
 import (
 	"fmt"
-	"strings"
 	"testing"
 	"time"
 
@@ -13,8 +12,6 @@ import (
 	_ "github.com/router-for-me/CLIProxyAPI/v7/internal/thinking/provider/claude"
 	_ "github.com/router-for-me/CLIProxyAPI/v7/internal/thinking/provider/codex"
 	_ "github.com/router-for-me/CLIProxyAPI/v7/internal/thinking/provider/gemini"
-	_ "github.com/router-for-me/CLIProxyAPI/v7/internal/thinking/provider/geminicli"
-	_ "github.com/router-for-me/CLIProxyAPI/v7/internal/thinking/provider/iflow"
 	_ "github.com/router-for-me/CLIProxyAPI/v7/internal/thinking/provider/kimi"
 	_ "github.com/router-for-me/CLIProxyAPI/v7/internal/thinking/provider/openai"
 	_ "github.com/router-for-me/CLIProxyAPI/v7/internal/thinking/provider/xai"
@@ -1043,10 +1040,10 @@ func TestThinkingE2EMatrix_Suffix(t *testing.T) {
 			expectValue: "128000",
 			expectErr:   false,
 		},
-		// Case 88: Gemini-CLI to Antigravity, budget 8192 → passthrough thinkingBudget
+		// Case 88: Antigravity to Antigravity, budget 8192 → passthrough thinkingBudget
 		{
 			name:            "88",
-			from:            "gemini-cli",
+			from:            "antigravity",
 			to:              "antigravity",
 			model:           "antigravity-budget-model(8192)",
 			inputJSON:       `{"model":"antigravity-budget-model(8192)","request":{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}}`,
@@ -1055,10 +1052,10 @@ func TestThinkingE2EMatrix_Suffix(t *testing.T) {
 			includeThoughts: "true",
 			expectErr:       false,
 		},
-		// Case 89: Gemini-CLI to Antigravity, budget 64000 → clamped to Max
+		// Case 89: Antigravity to Antigravity, budget 64000 → clamped to Max
 		{
 			name:            "89",
-			from:            "gemini-cli",
+			from:            "antigravity",
 			to:              "antigravity",
 			model:           "antigravity-budget-model(64000)",
 			inputJSON:       `{"model":"antigravity-budget-model(64000)","request":{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}}`,
@@ -1068,190 +1065,12 @@ func TestThinkingE2EMatrix_Suffix(t *testing.T) {
 			expectErr:       false,
 		},
 
-		// iflow tests: glm-test and minimax-test (Cases 90-105)
+		// Gemini Family Cross-Channel Consistency (Cases 90-95)
+		// Tests that gemini/antigravity as same API family should have consistent validation behavior
 
-		// glm-test (from: openai, claude)
-		// Case 90: OpenAI to iflow, no suffix → passthrough
+		// Case 90: Gemini to Antigravity, budget 64000 (suffix) → clamped to Max
 		{
-			name:        "90",
-			from:        "openai",
-			to:          "iflow",
-			model:       "glm-test",
-			inputJSON:   `{"model":"glm-test","messages":[{"role":"user","content":"hi"}]}`,
-			expectField: "",
-			expectErr:   false,
-		},
-		// Case 91: OpenAI to iflow, (medium) → enable_thinking=true
-		{
-			name:        "91",
-			from:        "openai",
-			to:          "iflow",
-			model:       "glm-test(medium)",
-			inputJSON:   `{"model":"glm-test(medium)","messages":[{"role":"user","content":"hi"}]}`,
-			expectField: "chat_template_kwargs.enable_thinking",
-			expectValue: "true",
-			expectErr:   false,
-		},
-		// Case 92: OpenAI to iflow, (auto) → enable_thinking=true
-		{
-			name:        "92",
-			from:        "openai",
-			to:          "iflow",
-			model:       "glm-test(auto)",
-			inputJSON:   `{"model":"glm-test(auto)","messages":[{"role":"user","content":"hi"}]}`,
-			expectField: "chat_template_kwargs.enable_thinking",
-			expectValue: "true",
-			expectErr:   false,
-		},
-		// Case 93: OpenAI to iflow, (none) → enable_thinking=false
-		{
-			name:        "93",
-			from:        "openai",
-			to:          "iflow",
-			model:       "glm-test(none)",
-			inputJSON:   `{"model":"glm-test(none)","messages":[{"role":"user","content":"hi"}]}`,
-			expectField: "chat_template_kwargs.enable_thinking",
-			expectValue: "false",
-			expectErr:   false,
-		},
-		// Case 94: Claude to iflow, no suffix → passthrough
-		{
-			name:        "94",
-			from:        "claude",
-			to:          "iflow",
-			model:       "glm-test",
-			inputJSON:   `{"model":"glm-test","messages":[{"role":"user","content":"hi"}]}`,
-			expectField: "",
-			expectErr:   false,
-		},
-		// Case 95: Claude to iflow, (8192) → enable_thinking=true
-		{
-			name:        "95",
-			from:        "claude",
-			to:          "iflow",
-			model:       "glm-test(8192)",
-			inputJSON:   `{"model":"glm-test(8192)","messages":[{"role":"user","content":"hi"}]}`,
-			expectField: "chat_template_kwargs.enable_thinking",
-			expectValue: "true",
-			expectErr:   false,
-		},
-		// Case 96: Claude to iflow, (-1) → enable_thinking=true
-		{
-			name:        "96",
-			from:        "claude",
-			to:          "iflow",
-			model:       "glm-test(-1)",
-			inputJSON:   `{"model":"glm-test(-1)","messages":[{"role":"user","content":"hi"}]}`,
-			expectField: "chat_template_kwargs.enable_thinking",
-			expectValue: "true",
-			expectErr:   false,
-		},
-		// Case 97: Claude to iflow, (0) → enable_thinking=false
-		{
-			name:        "97",
-			from:        "claude",
-			to:          "iflow",
-			model:       "glm-test(0)",
-			inputJSON:   `{"model":"glm-test(0)","messages":[{"role":"user","content":"hi"}]}`,
-			expectField: "chat_template_kwargs.enable_thinking",
-			expectValue: "false",
-			expectErr:   false,
-		},
-
-		// minimax-test (from: openai, gemini)
-		// Case 98: OpenAI to iflow, no suffix → passthrough
-		{
-			name:        "98",
-			from:        "openai",
-			to:          "iflow",
-			model:       "minimax-test",
-			inputJSON:   `{"model":"minimax-test","messages":[{"role":"user","content":"hi"}]}`,
-			expectField: "",
-			expectErr:   false,
-		},
-		// Case 99: OpenAI to iflow, (medium) → reasoning_split=true
-		{
-			name:        "99",
-			from:        "openai",
-			to:          "iflow",
-			model:       "minimax-test(medium)",
-			inputJSON:   `{"model":"minimax-test(medium)","messages":[{"role":"user","content":"hi"}]}`,
-			expectField: "reasoning_split",
-			expectValue: "true",
-			expectErr:   false,
-		},
-		// Case 100: OpenAI to iflow, (auto) → reasoning_split=true
-		{
-			name:        "100",
-			from:        "openai",
-			to:          "iflow",
-			model:       "minimax-test(auto)",
-			inputJSON:   `{"model":"minimax-test(auto)","messages":[{"role":"user","content":"hi"}]}`,
-			expectField: "reasoning_split",
-			expectValue: "true",
-			expectErr:   false,
-		},
-		// Case 101: OpenAI to iflow, (none) → reasoning_split=false
-		{
-			name:        "101",
-			from:        "openai",
-			to:          "iflow",
-			model:       "minimax-test(none)",
-			inputJSON:   `{"model":"minimax-test(none)","messages":[{"role":"user","content":"hi"}]}`,
-			expectField: "reasoning_split",
-			expectValue: "false",
-			expectErr:   false,
-		},
-		// Case 102: Gemini to iflow, no suffix → passthrough
-		{
-			name:        "102",
-			from:        "gemini",
-			to:          "iflow",
-			model:       "minimax-test",
-			inputJSON:   `{"model":"minimax-test","contents":[{"role":"user","parts":[{"text":"hi"}]}]}`,
-			expectField: "",
-			expectErr:   false,
-		},
-		// Case 103: Gemini to iflow, (8192) → reasoning_split=true
-		{
-			name:        "103",
-			from:        "gemini",
-			to:          "iflow",
-			model:       "minimax-test(8192)",
-			inputJSON:   `{"model":"minimax-test(8192)","contents":[{"role":"user","parts":[{"text":"hi"}]}]}`,
-			expectField: "reasoning_split",
-			expectValue: "true",
-			expectErr:   false,
-		},
-		// Case 104: Gemini to iflow, (-1) → reasoning_split=true
-		{
-			name:        "104",
-			from:        "gemini",
-			to:          "iflow",
-			model:       "minimax-test(-1)",
-			inputJSON:   `{"model":"minimax-test(-1)","contents":[{"role":"user","parts":[{"text":"hi"}]}]}`,
-			expectField: "reasoning_split",
-			expectValue: "true",
-			expectErr:   false,
-		},
-		// Case 105: Gemini to iflow, (0) → reasoning_split=false
-		{
-			name:        "105",
-			from:        "gemini",
-			to:          "iflow",
-			model:       "minimax-test(0)",
-			inputJSON:   `{"model":"minimax-test(0)","contents":[{"role":"user","parts":[{"text":"hi"}]}]}`,
-			expectField: "reasoning_split",
-			expectValue: "false",
-			expectErr:   false,
-		},
-
-		// Gemini Family Cross-Channel Consistency (Cases 106-114)
-		// Tests that gemini/gemini-cli/antigravity as same API family should have consistent validation behavior
-
-		// Case 106: Gemini to Antigravity, budget 64000 (suffix) → clamped to Max
-		{
-			name:            "106",
+			name:            "90",
 			from:            "gemini",
 			to:              "antigravity",
 			model:           "gemini-budget-model(64000)",
@@ -1261,61 +1080,13 @@ func TestThinkingE2EMatrix_Suffix(t *testing.T) {
 			includeThoughts: "true",
 			expectErr:       false,
 		},
-		// Case 107: Gemini to Gemini-CLI, budget 64000 (suffix) → clamped to Max
+		// Case 94: Gemini to Antigravity, budget 8192 → passthrough (normal value)
 		{
-			name:            "107",
-			from:            "gemini",
-			to:              "gemini-cli",
-			model:           "gemini-budget-model(64000)",
-			inputJSON:       `{"model":"gemini-budget-model(64000)","contents":[{"role":"user","parts":[{"text":"hi"}]}]}`,
-			expectField:     "request.generationConfig.thinkingConfig.thinkingBudget",
-			expectValue:     "20000",
-			includeThoughts: "true",
-			expectErr:       false,
-		},
-		// Case 108: Gemini-CLI to Antigravity, budget 64000 (suffix) → clamped to Max
-		{
-			name:            "108",
-			from:            "gemini-cli",
-			to:              "antigravity",
-			model:           "gemini-budget-model(64000)",
-			inputJSON:       `{"model":"gemini-budget-model(64000)","request":{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}}`,
-			expectField:     "request.generationConfig.thinkingConfig.thinkingBudget",
-			expectValue:     "20000",
-			includeThoughts: "true",
-			expectErr:       false,
-		},
-		// Case 109: Gemini-CLI to Gemini, budget 64000 (suffix) → clamped to Max
-		{
-			name:            "109",
-			from:            "gemini-cli",
-			to:              "gemini",
-			model:           "gemini-budget-model(64000)",
-			inputJSON:       `{"model":"gemini-budget-model(64000)","request":{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}}`,
-			expectField:     "generationConfig.thinkingConfig.thinkingBudget",
-			expectValue:     "20000",
-			includeThoughts: "true",
-			expectErr:       false,
-		},
-		// Case 110: Gemini to Antigravity, budget 8192 → passthrough (normal value)
-		{
-			name:            "110",
+			name:            "94",
 			from:            "gemini",
 			to:              "antigravity",
 			model:           "gemini-budget-model(8192)",
 			inputJSON:       `{"model":"gemini-budget-model(8192)","contents":[{"role":"user","parts":[{"text":"hi"}]}]}`,
-			expectField:     "request.generationConfig.thinkingConfig.thinkingBudget",
-			expectValue:     "8192",
-			includeThoughts: "true",
-			expectErr:       false,
-		},
-		// Case 111: Gemini-CLI to Antigravity, budget 8192 → passthrough (normal value)
-		{
-			name:            "111",
-			from:            "gemini-cli",
-			to:              "antigravity",
-			model:           "gemini-budget-model(8192)",
-			inputJSON:       `{"model":"gemini-budget-model(8192)","request":{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}}`,
 			expectField:     "request.generationConfig.thinkingConfig.thinkingBudget",
 			expectValue:     "8192",
 			includeThoughts: "true",
@@ -1694,6 +1465,46 @@ func TestThinkingE2EMatrix_Body(t *testing.T) {
 			expectValue:     "low",
 			includeThoughts: "false",
 			expectErr:       false,
+		},
+		// Case 31A: reasoning_effort=none with zero allowed → delete thinkingConfig
+		{
+			name:        "31A",
+			from:        "openai",
+			to:          "gemini",
+			model:       "gemini-zero-mixed-model",
+			inputJSON:   `{"model":"gemini-zero-mixed-model","messages":[{"role":"user","content":"hi"}],"reasoning_effort":"none"}`,
+			expectField: "",
+			expectErr:   false,
+		},
+		// Case 31C: reasoning_effort=none with zero allowed to Antigravity → delete thinkingConfig
+		{
+			name:        "31C",
+			from:        "openai",
+			to:          "antigravity",
+			model:       "gemini-zero-mixed-model",
+			inputJSON:   `{"model":"gemini-zero-mixed-model","messages":[{"role":"user","content":"hi"}],"reasoning_effort":"none"}`,
+			expectField: "",
+			expectErr:   false,
+		},
+		// Case 31D: reasoning.effort=none with zero allowed → delete thinkingConfig
+		{
+			name:        "31D",
+			from:        "openai-response",
+			to:          "gemini",
+			model:       "gemini-zero-mixed-model",
+			inputJSON:   `{"model":"gemini-zero-mixed-model","input":[{"role":"user","content":"hi"}],"reasoning":{"effort":"none"}}`,
+			expectField: "",
+			expectErr:   false,
+		},
+		// Case 31F: reasoning.effort=none with zero allowed to Antigravity → delete thinkingConfig
+		{
+			name:        "31F",
+			from:        "openai-response",
+			to:          "antigravity",
+			model:       "gemini-zero-mixed-model",
+			inputJSON:   `{"model":"gemini-zero-mixed-model","input":[{"role":"user","content":"hi"}],"reasoning":{"effort":"none"}}`,
+			expectField: "",
+			expectErr:   false,
 		},
 		// Case 32: reasoning_effort=auto → -1 (DynamicAllowed=true)
 		{
@@ -2324,10 +2135,10 @@ func TestThinkingE2EMatrix_Body(t *testing.T) {
 			expectField: "",
 			expectErr:   true,
 		},
-		// Case 88: Gemini-CLI to Antigravity, thinkingBudget=8192 → passthrough
+		// Case 88: Antigravity to Antigravity, thinkingBudget=8192 → passthrough
 		{
 			name:            "88",
-			from:            "gemini-cli",
+			from:            "antigravity",
 			to:              "antigravity",
 			model:           "antigravity-budget-model",
 			inputJSON:       `{"model":"antigravity-budget-model","request":{"contents":[{"role":"user","parts":[{"text":"hi"}]}],"generationConfig":{"thinkingConfig":{"thinkingBudget":8192}}}}`,
@@ -2336,10 +2147,10 @@ func TestThinkingE2EMatrix_Body(t *testing.T) {
 			includeThoughts: "true",
 			expectErr:       false,
 		},
-		// Case 89: Gemini-CLI to Antigravity, thinkingBudget=64000 → exceeds Max error
+		// Case 89: Antigravity to Antigravity, thinkingBudget=64000 → exceeds Max error
 		{
 			name:        "89",
-			from:        "gemini-cli",
+			from:        "antigravity",
 			to:          "antigravity",
 			model:       "antigravity-budget-model",
 			inputJSON:   `{"model":"antigravity-budget-model","request":{"contents":[{"role":"user","parts":[{"text":"hi"}]}],"generationConfig":{"thinkingConfig":{"thinkingBudget":64000}}}}`,
@@ -2347,190 +2158,12 @@ func TestThinkingE2EMatrix_Body(t *testing.T) {
 			expectErr:   true,
 		},
 
-		// iflow tests: glm-test and minimax-test (Cases 90-105)
+		// Gemini Family Cross-Channel Consistency (Cases 90-95)
+		// Tests that gemini/antigravity as same API family should have consistent validation behavior
 
-		// glm-test (from: openai, claude)
-		// Case 90: OpenAI to iflow, no param → passthrough
+		// Case 90: Gemini to Antigravity, thinkingBudget=64000 → exceeds Max error (same family strict validation)
 		{
 			name:        "90",
-			from:        "openai",
-			to:          "iflow",
-			model:       "glm-test",
-			inputJSON:   `{"model":"glm-test","messages":[{"role":"user","content":"hi"}]}`,
-			expectField: "",
-			expectErr:   false,
-		},
-		// Case 91: OpenAI to iflow, reasoning_effort=medium → enable_thinking=true
-		{
-			name:        "91",
-			from:        "openai",
-			to:          "iflow",
-			model:       "glm-test",
-			inputJSON:   `{"model":"glm-test","messages":[{"role":"user","content":"hi"}],"reasoning_effort":"medium"}`,
-			expectField: "chat_template_kwargs.enable_thinking",
-			expectValue: "true",
-			expectErr:   false,
-		},
-		// Case 92: OpenAI to iflow, reasoning_effort=auto → enable_thinking=true
-		{
-			name:        "92",
-			from:        "openai",
-			to:          "iflow",
-			model:       "glm-test",
-			inputJSON:   `{"model":"glm-test","messages":[{"role":"user","content":"hi"}],"reasoning_effort":"auto"}`,
-			expectField: "chat_template_kwargs.enable_thinking",
-			expectValue: "true",
-			expectErr:   false,
-		},
-		// Case 93: OpenAI to iflow, reasoning_effort=none → enable_thinking=false
-		{
-			name:        "93",
-			from:        "openai",
-			to:          "iflow",
-			model:       "glm-test",
-			inputJSON:   `{"model":"glm-test","messages":[{"role":"user","content":"hi"}],"reasoning_effort":"none"}`,
-			expectField: "chat_template_kwargs.enable_thinking",
-			expectValue: "false",
-			expectErr:   false,
-		},
-		// Case 94: Claude to iflow, no param → passthrough
-		{
-			name:        "94",
-			from:        "claude",
-			to:          "iflow",
-			model:       "glm-test",
-			inputJSON:   `{"model":"glm-test","messages":[{"role":"user","content":"hi"}]}`,
-			expectField: "",
-			expectErr:   false,
-		},
-		// Case 95: Claude to iflow, thinking.budget_tokens=8192 → enable_thinking=true
-		{
-			name:        "95",
-			from:        "claude",
-			to:          "iflow",
-			model:       "glm-test",
-			inputJSON:   `{"model":"glm-test","messages":[{"role":"user","content":"hi"}],"thinking":{"type":"enabled","budget_tokens":8192}}`,
-			expectField: "chat_template_kwargs.enable_thinking",
-			expectValue: "true",
-			expectErr:   false,
-		},
-		// Case 96: Claude to iflow, thinking.budget_tokens=-1 → enable_thinking=true
-		{
-			name:        "96",
-			from:        "claude",
-			to:          "iflow",
-			model:       "glm-test",
-			inputJSON:   `{"model":"glm-test","messages":[{"role":"user","content":"hi"}],"thinking":{"type":"enabled","budget_tokens":-1}}`,
-			expectField: "chat_template_kwargs.enable_thinking",
-			expectValue: "true",
-			expectErr:   false,
-		},
-		// Case 97: Claude to iflow, thinking.budget_tokens=0 → enable_thinking=false
-		{
-			name:        "97",
-			from:        "claude",
-			to:          "iflow",
-			model:       "glm-test",
-			inputJSON:   `{"model":"glm-test","messages":[{"role":"user","content":"hi"}],"thinking":{"type":"enabled","budget_tokens":0}}`,
-			expectField: "chat_template_kwargs.enable_thinking",
-			expectValue: "false",
-			expectErr:   false,
-		},
-
-		// minimax-test (from: openai, gemini)
-		// Case 98: OpenAI to iflow, no param → passthrough
-		{
-			name:        "98",
-			from:        "openai",
-			to:          "iflow",
-			model:       "minimax-test",
-			inputJSON:   `{"model":"minimax-test","messages":[{"role":"user","content":"hi"}]}`,
-			expectField: "",
-			expectErr:   false,
-		},
-		// Case 99: OpenAI to iflow, reasoning_effort=medium → reasoning_split=true
-		{
-			name:        "99",
-			from:        "openai",
-			to:          "iflow",
-			model:       "minimax-test",
-			inputJSON:   `{"model":"minimax-test","messages":[{"role":"user","content":"hi"}],"reasoning_effort":"medium"}`,
-			expectField: "reasoning_split",
-			expectValue: "true",
-			expectErr:   false,
-		},
-		// Case 100: OpenAI to iflow, reasoning_effort=auto → reasoning_split=true
-		{
-			name:        "100",
-			from:        "openai",
-			to:          "iflow",
-			model:       "minimax-test",
-			inputJSON:   `{"model":"minimax-test","messages":[{"role":"user","content":"hi"}],"reasoning_effort":"auto"}`,
-			expectField: "reasoning_split",
-			expectValue: "true",
-			expectErr:   false,
-		},
-		// Case 101: OpenAI to iflow, reasoning_effort=none → reasoning_split=false
-		{
-			name:        "101",
-			from:        "openai",
-			to:          "iflow",
-			model:       "minimax-test",
-			inputJSON:   `{"model":"minimax-test","messages":[{"role":"user","content":"hi"}],"reasoning_effort":"none"}`,
-			expectField: "reasoning_split",
-			expectValue: "false",
-			expectErr:   false,
-		},
-		// Case 102: Gemini to iflow, no param → passthrough
-		{
-			name:        "102",
-			from:        "gemini",
-			to:          "iflow",
-			model:       "minimax-test",
-			inputJSON:   `{"model":"minimax-test","contents":[{"role":"user","parts":[{"text":"hi"}]}]}`,
-			expectField: "",
-			expectErr:   false,
-		},
-		// Case 103: Gemini to iflow, thinkingBudget=8192 → reasoning_split=true
-		{
-			name:        "103",
-			from:        "gemini",
-			to:          "iflow",
-			model:       "minimax-test",
-			inputJSON:   `{"model":"minimax-test","contents":[{"role":"user","parts":[{"text":"hi"}]}],"generationConfig":{"thinkingConfig":{"thinkingBudget":8192}}}`,
-			expectField: "reasoning_split",
-			expectValue: "true",
-			expectErr:   false,
-		},
-		// Case 104: Gemini to iflow, thinkingBudget=-1 → reasoning_split=true
-		{
-			name:        "104",
-			from:        "gemini",
-			to:          "iflow",
-			model:       "minimax-test",
-			inputJSON:   `{"model":"minimax-test","contents":[{"role":"user","parts":[{"text":"hi"}]}],"generationConfig":{"thinkingConfig":{"thinkingBudget":-1}}}`,
-			expectField: "reasoning_split",
-			expectValue: "true",
-			expectErr:   false,
-		},
-		// Case 105: Gemini to iflow, thinkingBudget=0 → reasoning_split=false
-		{
-			name:        "105",
-			from:        "gemini",
-			to:          "iflow",
-			model:       "minimax-test",
-			inputJSON:   `{"model":"minimax-test","contents":[{"role":"user","parts":[{"text":"hi"}]}],"generationConfig":{"thinkingConfig":{"thinkingBudget":0}}}`,
-			expectField: "reasoning_split",
-			expectValue: "false",
-			expectErr:   false,
-		},
-
-		// Gemini Family Cross-Channel Consistency (Cases 106-114)
-		// Tests that gemini/gemini-cli/antigravity as same API family should have consistent validation behavior
-
-		// Case 106: Gemini to Antigravity, thinkingBudget=64000 → exceeds Max error (same family strict validation)
-		{
-			name:        "106",
 			from:        "gemini",
 			to:          "antigravity",
 			model:       "gemini-budget-model",
@@ -2538,55 +2171,13 @@ func TestThinkingE2EMatrix_Body(t *testing.T) {
 			expectField: "",
 			expectErr:   true,
 		},
-		// Case 107: Gemini to Gemini-CLI, thinkingBudget=64000 → exceeds Max error (same family strict validation)
+		// Case 94: Gemini to Antigravity, thinkingBudget=8192 → passthrough (normal value)
 		{
-			name:        "107",
-			from:        "gemini",
-			to:          "gemini-cli",
-			model:       "gemini-budget-model",
-			inputJSON:   `{"model":"gemini-budget-model","contents":[{"role":"user","parts":[{"text":"hi"}]}],"generationConfig":{"thinkingConfig":{"thinkingBudget":64000}}}`,
-			expectField: "",
-			expectErr:   true,
-		},
-		// Case 108: Gemini-CLI to Antigravity, thinkingBudget=64000 → exceeds Max error (same family strict validation)
-		{
-			name:        "108",
-			from:        "gemini-cli",
-			to:          "antigravity",
-			model:       "gemini-budget-model",
-			inputJSON:   `{"model":"gemini-budget-model","request":{"contents":[{"role":"user","parts":[{"text":"hi"}]}],"generationConfig":{"thinkingConfig":{"thinkingBudget":64000}}}}`,
-			expectField: "",
-			expectErr:   true,
-		},
-		// Case 109: Gemini-CLI to Gemini, thinkingBudget=64000 → exceeds Max error (same family strict validation)
-		{
-			name:        "109",
-			from:        "gemini-cli",
-			to:          "gemini",
-			model:       "gemini-budget-model",
-			inputJSON:   `{"model":"gemini-budget-model","request":{"contents":[{"role":"user","parts":[{"text":"hi"}]}],"generationConfig":{"thinkingConfig":{"thinkingBudget":64000}}}}`,
-			expectField: "",
-			expectErr:   true,
-		},
-		// Case 110: Gemini to Antigravity, thinkingBudget=8192 → passthrough (normal value)
-		{
-			name:            "110",
+			name:            "94",
 			from:            "gemini",
 			to:              "antigravity",
 			model:           "gemini-budget-model",
 			inputJSON:       `{"model":"gemini-budget-model","contents":[{"role":"user","parts":[{"text":"hi"}]}],"generationConfig":{"thinkingConfig":{"thinkingBudget":8192}}}`,
-			expectField:     "request.generationConfig.thinkingConfig.thinkingBudget",
-			expectValue:     "8192",
-			includeThoughts: "true",
-			expectErr:       false,
-		},
-		// Case 111: Gemini-CLI to Antigravity, thinkingBudget=8192 → passthrough (normal value)
-		{
-			name:            "111",
-			from:            "gemini-cli",
-			to:              "antigravity",
-			model:           "gemini-budget-model",
-			inputJSON:       `{"model":"gemini-budget-model","request":{"contents":[{"role":"user","parts":[{"text":"hi"}]}],"generationConfig":{"thinkingConfig":{"thinkingBudget":8192}}}}`,
 			expectField:     "request.generationConfig.thinkingConfig.thinkingBudget",
 			expectValue:     "8192",
 			includeThoughts: "true",
@@ -3199,27 +2790,6 @@ func TestThinkingE2EClaudeAdaptive_Body(t *testing.T) {
 			expectValue: "high",
 			expectErr:   false,
 		},
-
-		{
-			name:        "C19",
-			from:        "claude",
-			to:          "iflow",
-			model:       "glm-test",
-			inputJSON:   `{"model":"glm-test","messages":[{"role":"user","content":"hi"}],"thinking":{"type":"adaptive"},"output_config":{"effort":"minimal"}}`,
-			expectField: "chat_template_kwargs.enable_thinking",
-			expectValue: "true",
-			expectErr:   false,
-		},
-		{
-			name:        "C20",
-			from:        "claude",
-			to:          "iflow",
-			model:       "minimax-test",
-			inputJSON:   `{"model":"minimax-test","messages":[{"role":"user","content":"hi"}],"thinking":{"type":"adaptive"},"output_config":{"effort":"high"}}`,
-			expectField: "reasoning_split",
-			expectValue: "true",
-			expectErr:   false,
-		},
 		{
 			name:            "C21",
 			from:            "claude",
@@ -3337,6 +2907,15 @@ func getTestModels() []*registry.ModelInfo {
 			Thinking:    &registry.ThinkingSupport{Min: 128, Max: 32768, Levels: []string{"low", "high"}, ZeroAllowed: false, DynamicAllowed: true},
 		},
 		{
+			ID:          "gemini-zero-mixed-model",
+			Object:      "model",
+			Created:     1700000000,
+			OwnedBy:     "test",
+			Type:        "gemini",
+			DisplayName: "Gemini Zero Mixed Model",
+			Thinking:    &registry.ThinkingSupport{Min: 1, Max: 65535, Levels: []string{"minimal", "low", "medium", "high"}, ZeroAllowed: true, DynamicAllowed: true},
+		},
+		{
 			ID:          "claude-budget-model",
 			Object:      "model",
 			Created:     1700000000,
@@ -3373,7 +2952,7 @@ func getTestModels() []*registry.ModelInfo {
 			Object:      "model",
 			Created:     1700000000,
 			OwnedBy:     "test",
-			Type:        "gemini-cli",
+			Type:        "antigravity",
 			DisplayName: "Antigravity Budget Model",
 			Thinking:    &registry.ThinkingSupport{Min: 128, Max: 20000, ZeroAllowed: true, DynamicAllowed: true},
 		},
@@ -3414,24 +2993,6 @@ func getTestModels() []*registry.ModelInfo {
 			UserDefined: true,
 			Thinking:    nil,
 		},
-		{
-			ID:          "glm-test",
-			Object:      "model",
-			Created:     1700000000,
-			OwnedBy:     "test",
-			Type:        "iflow",
-			DisplayName: "GLM Test Model",
-			Thinking:    &registry.ThinkingSupport{Levels: []string{"none", "auto", "minimal", "low", "medium", "high", "xhigh"}},
-		},
-		{
-			ID:          "minimax-test",
-			Object:      "model",
-			Created:     1700000000,
-			OwnedBy:     "test",
-			Type:        "iflow",
-			DisplayName: "MiniMax Test Model",
-			Thinking:    &registry.ThinkingSupport{Levels: []string{"none", "auto", "minimal", "low", "medium", "high", "xhigh"}},
-		},
 	}
 }
 
@@ -3447,8 +3008,6 @@ func runThinkingTests(t *testing.T, cases []thinkingTestCase) {
 			translateTo := tc.to
 			applyTo := tc.to
 			switch applyTo {
-			case "iflow":
-				translateTo = "openai"
 			case "kimi":
 				translateTo = "openai"
 			case "xai":
@@ -3483,8 +3042,6 @@ func runThinkingTests(t *testing.T, cases []thinkingTestCase) {
 				switch tc.to {
 				case "gemini":
 					hasThinking = gjson.GetBytes(body, "generationConfig.thinkingConfig").Exists()
-				case "gemini-cli":
-					hasThinking = gjson.GetBytes(body, "request.generationConfig.thinkingConfig").Exists()
 				case "antigravity":
 					hasThinking = gjson.GetBytes(body, "request.generationConfig.thinkingConfig").Exists()
 				case "claude":
@@ -3493,8 +3050,6 @@ func runThinkingTests(t *testing.T, cases []thinkingTestCase) {
 					hasThinking = gjson.GetBytes(body, "reasoning_effort").Exists()
 				case "codex":
 					hasThinking = gjson.GetBytes(body, "reasoning.effort").Exists() || gjson.GetBytes(body, "reasoning").Exists()
-				case "iflow":
-					hasThinking = gjson.GetBytes(body, "chat_template_kwargs.enable_thinking").Exists() || gjson.GetBytes(body, "reasoning_split").Exists()
 				}
 				if hasThinking {
 					t.Fatalf("expected no thinking field but found one, body=%s", string(body))
@@ -3521,9 +3076,9 @@ func runThinkingTests(t *testing.T, cases []thinkingTestCase) {
 				assertField(tc.expectField2, tc.expectValue2)
 			}
 
-			if tc.includeThoughts != "" && (tc.to == "gemini" || tc.to == "gemini-cli" || tc.to == "antigravity") {
+			if tc.includeThoughts != "" && (tc.to == "gemini" || tc.to == "antigravity") {
 				path := "generationConfig.thinkingConfig.includeThoughts"
-				if tc.to == "gemini-cli" || tc.to == "antigravity" {
+				if tc.to == "antigravity" {
 					path = "request.generationConfig.thinkingConfig.includeThoughts"
 				}
 				itVal := gjson.GetBytes(body, path)
@@ -3533,23 +3088,6 @@ func runThinkingTests(t *testing.T, cases []thinkingTestCase) {
 				actual := fmt.Sprintf("%v", itVal.Bool())
 				if actual != tc.includeThoughts {
 					t.Fatalf("includeThoughts: expected %s, got %s, body=%s", tc.includeThoughts, actual, string(body))
-				}
-			}
-
-			// Verify clear_thinking for iFlow GLM models when enable_thinking=true
-			if tc.to == "iflow" && tc.expectField == "chat_template_kwargs.enable_thinking" && tc.expectValue == "true" {
-				baseModel := thinking.ParseSuffix(tc.model).ModelName
-				isGLM := strings.HasPrefix(strings.ToLower(baseModel), "glm")
-				ctVal := gjson.GetBytes(body, "chat_template_kwargs.clear_thinking")
-				if isGLM {
-					if !ctVal.Exists() {
-						t.Fatalf("expected clear_thinking field not found for GLM model, body=%s", string(body))
-					}
-					if ctVal.Bool() != false {
-						t.Fatalf("clear_thinking: expected false, got %v, body=%s", ctVal.Bool(), string(body))
-					}
-				} else if ctVal.Exists() {
-					t.Fatalf("expected no clear_thinking field for non-GLM enable_thinking model, body=%s", string(body))
 				}
 			}
 		})

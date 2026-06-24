@@ -307,9 +307,6 @@ func validateAntigravityRequestSignatures(ctx context.Context, modelName string,
 	rawJSON = antigravityclaude.StripEmptySignatureThinkingBlocks(rawJSON)
 	logAntigravitySignatureStrip(before, countClaudeThinkingBlocks(rawJSON), "prefix_cleanup", "empty_or_non_claude_signature")
 	if cache.SignatureCacheEnabled() {
-		if errRequire := antigravityclaude.RequireCachedThinkingSignatures(ctx, modelName, rawJSON); errRequire != nil {
-			return nil, homeKVUnavailableStatusErr(errRequire)
-		}
 		return rawJSON, nil
 	}
 	if !cache.SignatureBypassStrictMode() {
@@ -491,7 +488,7 @@ func decideAntigravity429(body []byte) antigravity429Decision {
 		return decision
 	}
 
-	if retryAfter, parseErr := parseRetryDelay(body); parseErr == nil && retryAfter != nil {
+	if retryAfter, parseErr := helps.ParseRetryDelay(body); parseErr == nil && retryAfter != nil {
 		decision.retryAfter = retryAfter
 	}
 
@@ -608,7 +605,7 @@ func antigravityHasExplicitCreditsBalanceExhaustedReason(body []byte) bool {
 func newAntigravityStatusErr(statusCode int, body []byte) statusErr {
 	err := statusErr{code: statusCode, msg: string(body)}
 	if statusCode == http.StatusTooManyRequests {
-		if retryAfter, parseErr := parseRetryDelay(body); parseErr == nil && retryAfter != nil {
+		if retryAfter, parseErr := helps.ParseRetryDelay(body); parseErr == nil && retryAfter != nil {
 			err.retryAfter = retryAfter
 		}
 	}
@@ -690,6 +687,15 @@ attemptLoop:
 				if cp := injectEnabledCreditTypes(translated); len(cp) > 0 {
 					requestPayload = cp
 					helps.MarkCreditsUsed(ctx)
+				}
+			}
+			replayScope := antigravityReasoningReplayScope{}
+			if antigravityUsesReasoningReplayCache(baseModel) {
+				var errReplay error
+				requestPayload, replayScope, errReplay = prepareAntigravityGeminiReasoningReplayPayload(ctx, baseModel, req, opts, requestPayload)
+				if errReplay != nil {
+					err = errReplay
+					return resp, err
 				}
 			}
 
@@ -799,6 +805,10 @@ attemptLoop:
 						continue attemptLoop
 					}
 				}
+				if errClear := clearAntigravityReasoningReplayOnInvalidSignature(ctx, replayScope, httpResp.StatusCode, bodyBytes); errClear != nil {
+					err = errClear
+					return resp, err
+				}
 				err = newAntigravityStatusErr(httpResp.StatusCode, bodyBytes)
 				return resp, err
 			}
@@ -807,6 +817,7 @@ attemptLoop:
 			if useCredits {
 				clearAntigravityCreditsFailureState(auth)
 			}
+			cacheAntigravityReasoningReplayFromResponse(ctx, replayScope, requestPayload, bodyBytes)
 			bodyBytes = e.resolveWebSearchGroundingURLs(ctx, auth, from, originalPayload, translated, bodyBytes)
 			reporter.Publish(ctx, helps.ParseAntigravityUsage(bodyBytes))
 			var param any
@@ -1370,6 +1381,15 @@ attemptLoop:
 					helps.MarkCreditsUsed(ctx)
 				}
 			}
+			replayScope := antigravityReasoningReplayScope{}
+			if antigravityUsesReasoningReplayCache(baseModel) {
+				var errReplay error
+				requestPayload, replayScope, errReplay = prepareAntigravityGeminiReasoningReplayPayload(ctx, baseModel, req, opts, requestPayload)
+				if errReplay != nil {
+					err = errReplay
+					return nil, err
+				}
+			}
 			httpReq, errReq := e.buildRequest(ctx, auth, token, baseModel, requestPayload, true, opts.Alt, baseURL)
 			if errReq != nil {
 				err = errReq
@@ -1488,6 +1508,10 @@ attemptLoop:
 						continue attemptLoop
 					}
 				}
+				if errClear := clearAntigravityReasoningReplayOnInvalidSignature(ctx, replayScope, httpResp.StatusCode, bodyBytes); errClear != nil {
+					err = errClear
+					return nil, err
+				}
 				err = newAntigravityStatusErr(httpResp.StatusCode, bodyBytes)
 				return nil, err
 			}
@@ -1496,12 +1520,16 @@ attemptLoop:
 			if useCredits {
 				clearAntigravityCreditsFailureState(auth)
 			}
+			replayAccumulator := newAntigravityReasoningReplayAccumulator(replayScope, requestPayload)
 			out := make(chan cliproxyexecutor.StreamChunk)
 			go func(resp *http.Response) {
 				defer close(out)
 				defer func() {
+					if replayAccumulator != nil {
+						replayAccumulator.Flush(ctx)
+					}
 					if errClose := resp.Body.Close(); errClose != nil {
-						log.Errorf("antigravity executor: close response body error: %v", errClose)
+						log.Errorf("antigravity executor: close response line error: %v", errClose)
 					}
 				}()
 				scanner := bufio.NewScanner(resp.Body)
@@ -1510,6 +1538,9 @@ attemptLoop:
 				for scanner.Scan() {
 					line := scanner.Bytes()
 					helps.AppendAPIResponseChunk(ctx, e.cfg, line)
+					if replayAccumulator != nil {
+						replayAccumulator.ObserveSSELine(line)
+					}
 
 					// Filter usage metadata for all models
 					// Only retain usage statistics in the terminal chunk
@@ -1656,9 +1687,9 @@ func (e *AntigravityExecutor) CountTokens(ctx context.Context, auth *cliproxyaut
 		return cliproxyexecutor.Response{}, err
 	}
 
-	payload = deleteJSONField(payload, "project")
-	payload = deleteJSONField(payload, "model")
-	payload = deleteJSONField(payload, "request.safetySettings")
+	payload = helps.DeleteJSONField(payload, "project")
+	payload = helps.DeleteJSONField(payload, "model")
+	payload = helps.DeleteJSONField(payload, "request.safetySettings")
 
 	baseURLs := antigravityBaseURLFallbackOrder(auth)
 	httpClient := newAntigravityHTTPClient(ctx, e.cfg, auth, 0)
@@ -1759,7 +1790,7 @@ func (e *AntigravityExecutor) CountTokens(ctx context.Context, auth *cliproxyaut
 		}
 		sErr := statusErr{code: httpResp.StatusCode, msg: string(bodyBytes)}
 		if httpResp.StatusCode == http.StatusTooManyRequests {
-			if retryAfter, parseErr := parseRetryDelay(bodyBytes); parseErr == nil && retryAfter != nil {
+			if retryAfter, parseErr := helps.ParseRetryDelay(bodyBytes); parseErr == nil && retryAfter != nil {
 				sErr.retryAfter = retryAfter
 			}
 		}
@@ -1770,7 +1801,7 @@ func (e *AntigravityExecutor) CountTokens(ctx context.Context, auth *cliproxyaut
 	case lastStatus != 0:
 		sErr := statusErr{code: lastStatus, msg: string(lastBody)}
 		if lastStatus == http.StatusTooManyRequests {
-			if retryAfter, parseErr := parseRetryDelay(lastBody); parseErr == nil && retryAfter != nil {
+			if retryAfter, parseErr := helps.ParseRetryDelay(lastBody); parseErr == nil && retryAfter != nil {
 				sErr.retryAfter = retryAfter
 			}
 		}
@@ -1980,7 +2011,7 @@ func (e *AntigravityExecutor) refreshTokenSingleFlight(ctx context.Context, auth
 	if httpResp.StatusCode < http.StatusOK || httpResp.StatusCode >= http.StatusMultipleChoices {
 		sErr := statusErr{code: httpResp.StatusCode, msg: string(bodyBytes)}
 		if httpResp.StatusCode == http.StatusTooManyRequests {
-			if retryAfter, parseErr := parseRetryDelay(bodyBytes); parseErr == nil && retryAfter != nil {
+			if retryAfter, parseErr := helps.ParseRetryDelay(bodyBytes); parseErr == nil && retryAfter != nil {
 				sErr.retryAfter = retryAfter
 			}
 		}
@@ -2230,9 +2261,10 @@ func (e *AntigravityExecutor) buildRequest(ctx context.Context, auth *cliproxyau
 			payloadStr, _ = sjson.Delete(payloadStr, "request.generationConfig.maxOutputTokens")
 		}
 
-		bodyReader = strings.NewReader(payloadStr)
+		payloadStrBytes := applyAntigravityNativeSignatureReplayIfNeeded(modelName, []byte(payloadStr))
+		bodyReader = bytes.NewReader(payloadStrBytes)
 		if e.cfg != nil && e.cfg.RequestLog {
-			payloadLog = []byte(payloadStr)
+			payloadLog = append([]byte(nil), payloadStrBytes...)
 		}
 	} else {
 		if strings.Contains(modelName, "claude") {
@@ -2241,6 +2273,7 @@ func (e *AntigravityExecutor) buildRequest(ctx context.Context, auth *cliproxyau
 			payload, _ = sjson.DeleteBytes(payload, "request.generationConfig.maxOutputTokens")
 		}
 
+		payload = applyAntigravityNativeSignatureReplayIfNeeded(modelName, payload)
 		bodyReader = bytes.NewReader(payload)
 		if e.cfg != nil && e.cfg.RequestLog {
 			payloadLog = append([]byte(nil), payload...)

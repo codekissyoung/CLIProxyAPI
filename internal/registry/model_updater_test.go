@@ -47,7 +47,6 @@ func validTestModelsCatalog() *staticModelsJSON {
 		Claude:      []*ModelInfo{{ID: "claude-test"}},
 		Gemini:      []*ModelInfo{{ID: "gemini-test"}},
 		Vertex:      []*ModelInfo{{ID: "vertex-test"}},
-		GeminiCLI:   []*ModelInfo{{ID: "gemini-cli-test"}},
 		AIStudio:    []*ModelInfo{{ID: "aistudio-test"}},
 		CodexFree:   []*ModelInfo{{ID: "codex-free-test"}},
 		CodexTeam:   []*ModelInfo{{ID: "codex-team-test"}},
