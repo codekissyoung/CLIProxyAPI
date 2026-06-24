@@ -938,7 +938,10 @@ func applyCodexWebsocketHeaders(ctx context.Context, headers http.Header, auth *
 	misc.EnsureHeader(headers, ginHeaders, "Version", "")
 	uaForced := false
 	if isAPIKey {
-		ensureHeaderWithPriority(headers, ginHeaders, "User-Agent", "", "")
+		// API-key clients keep their own UA (no macOS hardening), but never let it
+		// fall through to Go's default Go-http-client UA: when the client sends no
+		// UA, fall back to codexUserAgent. Mirrors the REST API-key path.
+		ensureHeaderWithPriority(headers, ginHeaders, "User-Agent", "", codexUserAgent)
 	} else {
 		ensureHeaderWithConfigPrecedence(headers, ginHeaders, "User-Agent", cfgUserAgent, codexUserAgent)
 		// Multi-user Pro account hardening: align cross-platform clients to
@@ -950,6 +953,13 @@ func applyCodexWebsocketHeaders(ctx context.Context, headers http.Header, auth *
 			headers.Set("User-Agent", codexUserAgent)
 			uaForced = true
 		}
+	}
+
+	// Final safety net: a Codex websocket request must never reach chatgpt.com
+	// with Go's default Go-http-client UA. If every branch above left it empty
+	// (e.g. an API-key client that sent no UA), pin the canonical Codex UA.
+	if strings.TrimSpace(headers.Get("User-Agent")) == "" {
+		headers.Set("User-Agent", codexUserAgent)
 	}
 
 	betaHeader := strings.TrimSpace(headers.Get("OpenAI-Beta"))

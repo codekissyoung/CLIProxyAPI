@@ -478,8 +478,11 @@ func TestApplyCodexWebsocketHeadersIgnoresConfigForAPIKeyAuth(t *testing.T) {
 
 	headers := applyCodexWebsocketHeaders(context.Background(), http.Header{}, auth, "sk-test", cfg)
 
-	if got := headers.Get("User-Agent"); got != "" {
-		t.Fatalf("User-Agent = %s, want empty", got)
+	// API-key auth must ignore the admin config UA (config-ua must not leak),
+	// but it must also never fall through to an empty / Go-http-client UA: the
+	// safety net pins codexUserAgent when the client sent none.
+	if got := headers.Get("User-Agent"); got != codexUserAgent {
+		t.Fatalf("User-Agent = %q, want canonical fallback %q (config UA must be ignored, empty UA forbidden)", got, codexUserAgent)
 	}
 	if got := headers.Get("x-codex-beta-features"); got != "" {
 		t.Fatalf("x-codex-beta-features = %q, want empty", got)

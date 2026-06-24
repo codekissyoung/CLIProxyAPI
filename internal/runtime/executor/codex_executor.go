@@ -1904,6 +1904,12 @@ func applyCodexHeaders(r *http.Request, auth *cliproxyauth.Auth, token string, s
 		uaForced = true
 	}
 
+	// Final safety net: never reach chatgpt.com with Go's default Go-http-client
+	// UA. If every branch above left it empty, pin the canonical Codex UA.
+	if strings.TrimSpace(r.Header.Get("User-Agent")) == "" {
+		r.Header.Set("User-Agent", codexUserAgent)
+	}
+
 	if strings.Contains(r.Header.Get("User-Agent"), "Mac OS") {
 		misc.EnsureHeader(r.Header, ginHeaders, "Session_id", uuid.NewString())
 	}

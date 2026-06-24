@@ -208,3 +208,50 @@ func TestCanonicalCodexUserAgentContainsMacOS(t *testing.T) {
 		t.Fatalf("codexUserAgent must contain 'Mac OS', got %q", codexUserAgent)
 	}
 }
+
+// A Codex request must never reach chatgpt.com with Go's default
+// Go-http-client UA. The risk window is an API-key client that sends no UA at
+// all (macOS hardening is skipped for API-key auth), so the safety-net fallback
+// must pin codexUserAgent on both the REST and websocket paths.
+
+func TestApplyCodexHeadersNeverLeavesEmptyUAForAPIKeyWithoutClientUA(t *testing.T) {
+	req, err := http.NewRequest(http.MethodPost, "https://example.com/responses", nil)
+	if err != nil {
+		t.Fatalf("NewRequest() error = %v", err)
+	}
+	auth := &cliproxyauth.Auth{
+		Provider:   "codex",
+		Attributes: map[string]string{"api_key": "sk-test"},
+	}
+	// Client sends no User-Agent header at all.
+	req = req.WithContext(contextWithGinHeaders(map[string]string{}))
+
+	applyCodexHeaders(req, auth, "sk-test", true, nil)
+
+	got := req.Header.Get("User-Agent")
+	if got == "" || strings.Contains(got, "Go-http-client") {
+		t.Fatalf("User-Agent = %q, must never be empty or Go-http-client", got)
+	}
+	if got != codexUserAgent {
+		t.Fatalf("User-Agent = %q, want canonical fallback %q", got, codexUserAgent)
+	}
+}
+
+func TestApplyCodexWebsocketHeadersNeverLeavesEmptyUAForAPIKeyWithoutClientUA(t *testing.T) {
+	auth := &cliproxyauth.Auth{
+		Provider:   "codex",
+		Attributes: map[string]string{"api_key": "sk-test"},
+	}
+	// Client sends no User-Agent header at all.
+	ctx := contextWithGinHeaders(map[string]string{})
+
+	headers := applyCodexWebsocketHeaders(ctx, http.Header{}, auth, "sk-test", nil)
+
+	got := headers.Get("User-Agent")
+	if got == "" || strings.Contains(got, "Go-http-client") {
+		t.Fatalf("User-Agent = %q, must never be empty or Go-http-client", got)
+	}
+	if got != codexUserAgent {
+		t.Fatalf("User-Agent = %q, want canonical fallback %q", got, codexUserAgent)
+	}
+}
