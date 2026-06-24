@@ -5,7 +5,7 @@
 CPA 在 ice 分支被用作"小组 N 个组员共用一个 OpenAI Pro 账号"的中转。
 当前已落地的反指纹改动：
 
-- `User-Agent` 兜底 `codex-tui/0.128.0 (Mac OS 14.5.0; arm64) iTerm.app/3.6.9 (codex-tui; 0.128.0)` —— 与真实 codex CLI 完全一致
+- `User-Agent` 兜底为常量 `codexUserAgent`（当前值 `codex-tui/0.140.0 (Mac OS 26.5.1; arm64) iTerm.app/3.6.8 (codex-tui; 0.140.0)`，定义于 `codex_executor.go`，随真实 codex CLI 版本更新）—— 与真实 codex CLI 完全一致
 - `X-Codex-Turn-Metadata.workspaces` 字段在 `applyCodexHeaders` / `applyCodexWebsocketHeaders` 里被剥离 —— 防止 git 仓库 / 本地路径 / commit hash 泄露多人特征
 - 非 macOS 客户端 UA 强制覆写为兜底 `codexUserAgent`，并联动覆写 `Originator` 为 `codex-tui` —— 防止"同账号、多种 OS"信号泄露。仅在 OAuth 路径生效（API-key 路径不变），且尊重管理员显式配置的 `codex-header-defaults.user-agent`
 
@@ -80,7 +80,7 @@ CPA 在 ice 分支被用作"小组 N 个组员共用一个 OpenAI Pro 账号"的
 2026-05-07 在 ice-server 临时打开 `request-log: true`、`debug: true`、`commercial-mode: false`，对 7 笔真实 `/v1/responses` 流量取上下游 header 对照：
 
 - 6 笔 macOS 客户端（UA 含 `Mac OS`）：上游 UA / Originator **原样透传**，未触发覆写分支
-- 1 笔非 macOS 客户端（下游 UA = `Codex-CLI/1.0`）：上游 UA 被覆写为 `codex-tui/0.128.0 (Mac OS 14.5.0; arm64) iTerm.app/3.6.9 (codex-tui; 0.128.0)`，Originator 联动设为 `codex-tui` ✅
+- 1 笔非 macOS 客户端（下游 UA = `Codex-CLI/1.0`）：上游 UA 被覆写为兜底常量 `codexUserAgent`，Originator 联动设为 `codex-tui` ✅
 
 每条上游 header 也确认带上了**对应组员**的 `Chatgpt-Account-Id`（不同请求不同账号 ID），证明账号路由没被覆写影响。
 
