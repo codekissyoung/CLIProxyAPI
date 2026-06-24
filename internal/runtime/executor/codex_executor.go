@@ -1670,6 +1670,9 @@ type codexIdentityReplacement struct {
 func (e *CodexExecutor) cacheHelper(ctx context.Context, from sdktranslator.Format, url string, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, userPayload []byte, rawJSON []byte) (*http.Request, []byte, codexIdentityConfuseState, error) {
 	var cache helps.CodexCache
 	if sourceFormatEqual(from, sdktranslator.FormatClaude) {
+		// Pass nil headers: the session header is still resolved via the
+		// ctx->gin request fallback in ExtractClaudeCodeSessionID, so the
+		// prompt cache key stays stable per Claude Code session.
 		cached, ok, errCache := helps.ClaudeCodePromptCache(ctx, req.Model, req.Payload, nil)
 		if errCache != nil {
 			return nil, nil, codexIdentityConfuseState{}, errCache
@@ -1882,6 +1885,10 @@ func applyCodexHeaders(r *http.Request, auth *cliproxyauth.Auth, token string, s
 	stripCodexTurnMetadataWorkspaces(r.Header)
 	misc.EnsureHeader(r.Header, ginHeaders, "X-Client-Request-Id", "")
 	isAPIKey := codexAuthUsesAPIKey(auth)
+	// cfgUserAgent is empty in the common case (no codex-header-defaults.user-agent
+	// set). The config branch is NOT dead code: an empty cfgUserAgent keeps client-UA
+	// passthrough AND enables the non-macOS -> macOS hardening below. A non-empty
+	// cfgUserAgent is an explicit admin override that pins the UA and skips hardening.
 	cfgUserAgent, _ := codexHeaderDefaults(cfg, auth)
 	ensureHeaderWithConfigPrecedence(r.Header, ginHeaders, "User-Agent", cfgUserAgent, codexUserAgent)
 

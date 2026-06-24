@@ -16,7 +16,10 @@ const ClaudeCodeSessionHeader = "X-Claude-Code-Session-Id"
 
 var claudeCodeSessionSuffixPattern = regexp.MustCompile(`_session_([a-f0-9-]+)$`)
 
-// ExtractClaudeCodeSessionID resolves a Claude Code session ID, preferring X-Claude-Code-Session-Id over payload metadata.
+// ExtractClaudeCodeSessionID resolves a Claude Code session ID in priority
+// order: the X-Claude-Code-Session-Id header arg, then the same header on the
+// ctx gin request, then payload metadata. The ctx fallback lets callers pass
+// nil headers and still resolve the session from the inbound request.
 func ExtractClaudeCodeSessionID(ctx context.Context, payload []byte, headers http.Header) string {
 	if headers != nil {
 		if sessionID := strings.TrimSpace(headers.Get(ClaudeCodeSessionHeader)); sessionID != "" {

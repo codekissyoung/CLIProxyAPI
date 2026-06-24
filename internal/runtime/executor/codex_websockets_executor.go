@@ -887,6 +887,9 @@ func applyCodexPromptCacheHeadersWithContext(ctx context.Context, from sdktransl
 
 	var cache helps.CodexCache
 	if sourceFormatEqual(from, sdktranslator.FormatClaude) {
+		// Pass nil headers: the session header is still resolved via the
+		// ctx->gin request fallback in ExtractClaudeCodeSessionID, so the
+		// prompt cache key stays stable per Claude Code session.
 		cached, ok, errCache := helps.ClaudeCodePromptCache(ctx, req.Model, req.Payload, nil)
 		if errCache != nil {
 			return nil, nil, errCache
@@ -923,6 +926,8 @@ func applyCodexWebsocketHeaders(ctx context.Context, headers http.Header, auth *
 	}
 
 	isAPIKey := codexAuthUsesAPIKey(auth)
+	// cfgUserAgent is empty in the common case (no codex-header-defaults.user-agent
+	// set); the config branch below is still live — see applyCodexHeaders.
 	cfgUserAgent, cfgBetaFeatures := codexHeaderDefaults(cfg, auth)
 	ensureHeaderWithPriority(headers, ginHeaders, "x-codex-beta-features", cfgBetaFeatures, "")
 	misc.EnsureHeader(headers, ginHeaders, "x-codex-turn-state", "")
