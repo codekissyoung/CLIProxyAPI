@@ -27,6 +27,8 @@ TARGETS=(
     "cheery-taste|self|103.91.219.75"
     "ice-server|ice-server|103.91.219.4"
     "ice-server-2|ice-server-2|45.59.131.169"
+    "ice-do-db-1|ice-do-db-1|165.232.147.148"
+    "ice-do-web-1|ice-do-web-1|164.90.149.100"
 )
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
