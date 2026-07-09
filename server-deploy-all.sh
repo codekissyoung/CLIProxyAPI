@@ -29,6 +29,8 @@ TARGETS=(
     "ice-server-2|ice-server-2|45.59.131.169"
     "ice-do-db-1|ice-do-db-1|165.232.147.148"
     "ice-do-web-1|ice-do-web-1|164.90.149.100"
+    "ice-server-4|ice-server-4|159.223.205.198"
+    "ice-server-3|ice-server-3|45.59.131.117"
 )
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
