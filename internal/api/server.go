@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/access"
 	managementHandlers "github.com/router-for-me/CLIProxyAPI/v7/internal/api/handlers/management"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/api/middleware"
@@ -506,6 +507,12 @@ func (s *Server) setupRoutes() {
 	}
 	s.engine.GET("/healthz", healthzHandler)
 	s.engine.HEAD("/healthz", healthzHandler)
+
+	// Account-level cumulative metrics (internal/metrics), Prometheus text
+	// exposition format. Unauthenticated by design, matching how the rest of
+	// this deployment's exporters (node/postgres/redis) work — access control
+	// is UFW source-IP allowlisting on this port, not an app-layer secret.
+	s.engine.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
 	s.engine.GET("/management.html", s.serveManagementControlPanel)
 	openaiHandlers := openai.NewOpenAIAPIHandler(s.handlers)

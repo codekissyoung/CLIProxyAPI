@@ -14,6 +14,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/metrics"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/util"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
@@ -689,6 +690,7 @@ func LogWithRequestID(ctx context.Context) *log.Entry {
 }
 
 func LogUpstreamError(entry *log.Entry, provider, model, authID, authLabel string, httpStatus int, errorMsg string) {
+	metrics.RecordUpstreamFailure(authID, httpStatus)
 	entry.WithFields(log.Fields{
 		"provider":    provider,
 		"model":       model,
@@ -719,6 +721,7 @@ type UpstreamErrorDetail struct {
 // aggregated by account/session for optimization. Fields that are empty/zero are
 // omitted to keep noise down.
 func LogUpstreamErrorDetail(entry *log.Entry, d UpstreamErrorDetail) {
+	metrics.RecordUpstreamFailure(d.AuthID, d.Status)
 	fields := log.Fields{
 		"provider":    d.Provider,
 		"model":       d.Model,

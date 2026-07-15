@@ -18,6 +18,7 @@ import (
 	"github.com/tidwall/gjson"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/metrics"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/thinking"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
 )
@@ -414,7 +415,16 @@ func NewSessionAffinitySelectorWithConfig(cfg SessionAffinityConfig) *SessionAff
 // Note: The cache key includes provider, session ID, and model to handle cases where
 // a session uses multiple models (e.g., gemini-2.5-pro and gemini-3-flash-preview)
 // that may be supported by different auth credentials, and to avoid cross-provider conflicts.
-func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, auths []*Auth) (*Auth, error) {
+func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, auths []*Auth) (auth *Auth, err error) {
+	// Cumulative per-account request counter: covers every return path below
+	// (no-session fallback, cache hit, reselect-on-unavailable, fallback cache
+	// hit, new binding) via defer rather than instrumenting each return
+	// individually, so this can't drift out of sync if a new branch is added.
+	defer func() {
+		if err == nil && auth != nil {
+			metrics.RecordAccountPick(auth.ID)
+		}
+	}()
 	entry := selectorLogEntry(ctx)
 	primaryID, fallbackID := extractSessionIDs(opts.Headers, opts.OriginalRequest, opts.Metadata)
 	// Session parse trace: primaryID/fallbackID carry a source prefix (claude:/header:/
@@ -469,11 +479,12 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 		}
 	}
 
-	auth, err := s.fallback.Pick(ctx, provider, model, opts, auths)
+	auth, err = s.fallback.Pick(ctx, provider, model, opts, auths)
 	if err != nil {
 		return nil, err
 	}
 	s.cache.Set(cacheKey, auth.ID)
+	metrics.RecordNewSession(auth.ID)
 	entry.Infof("session-affinity: cache miss, new binding | session=%s auth=%s provider=%s model=%s", primaryID, auth.ID, provider, model)
 	return auth, nil
 }
