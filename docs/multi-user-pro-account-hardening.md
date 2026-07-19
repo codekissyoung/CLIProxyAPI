@@ -5,9 +5,9 @@
 CPA 在 ice 分支被用作"小组 N 个组员共用一个 OpenAI Pro 账号"的中转。
 当前已落地的反指纹改动：
 
-- `User-Agent` 兜底为常量 `codexUserAgent`（当前值 `codex-tui/0.140.0 (Mac OS 26.5.1; arm64) iTerm.app/3.6.8 (codex-tui; 0.140.0)`，定义于 `codex_executor.go`，随真实 codex CLI 版本更新）—— 与真实 codex CLI 完全一致
+- `User-Agent` 兜底为常量 `codexUserAgent`（当前值 `Codex Desktop/0.145.0-alpha.18 (Mac OS 26.5.2; arm64) unknown (Codex Desktop; 26.715.31925)`，定义于 `codex_executor.go`，从真实 Codex Desktop 客户端日志取值，随真实客户端版本更新）—— 与真实 Codex Desktop 客户端完全一致
 - `X-Codex-Turn-Metadata.workspaces` 字段在 `applyCodexHeaders` / `applyCodexWebsocketHeaders` 里被剥离 —— 防止 git 仓库 / 本地路径 / commit hash 泄露多人特征
-- 非 macOS 客户端 UA 强制覆写为兜底 `codexUserAgent`，并联动覆写 `Originator` 为 `codex-tui` —— 防止"同账号、多种 OS"信号泄露。仅在 OAuth 路径生效（API-key 路径不变），且尊重管理员显式配置的 `codex-header-defaults.user-agent`
+- 非 macOS 客户端 UA 强制覆写为兜底 `codexUserAgent`，并联动覆写 `Originator` 为 `codexOriginator`（当前值 `Codex Desktop`，与 UA 锁步）—— 防止"同账号、多种 OS"信号泄露。仅在 OAuth 路径生效（API-key 路径不变），且尊重管理员显式配置的 `codex-header-defaults.user-agent`
 
 只支持 `/v1/responses` 路径（路径 A），其它 codex 路径暂不需要考虑。
 
@@ -36,7 +36,7 @@ CPA 在 ice 分支被用作"小组 N 个组员共用一个 OpenAI Pro 账号"的
 
 ### ~~2. `User-Agent` 跨平台一致性~~（已落地）
 
-非 macOS 客户端 UA 在 `applyCodexHeaders` / `applyCodexWebsocketHeaders` 里被强制覆写为 `codexUserAgent`，同时 `Originator` 联动覆写为 `codex-tui`，避免 UA/Originator 错配指纹。仅 OAuth 路径生效；管理员显式配置 `codex-header-defaults.user-agent` 时跳过强制（视为管理员明确意图）。详见下方"已落地"表格。
+非 macOS 客户端 UA 在 `applyCodexHeaders` / `applyCodexWebsocketHeaders` 里被强制覆写为 `codexUserAgent`，同时 `Originator` 联动覆写为 `codexOriginator`（当前 `Codex Desktop`），避免 UA/Originator 错配指纹。仅 OAuth 路径生效；管理员显式配置 `codex-header-defaults.user-agent` 时跳过强制（视为管理员明确意图）。详见下方"已落地"表格。
 
 ### 3. `X-Codex-Window-Id` / `X-Client-Request-Id` 时间戳防关联（低-中优先级）
 
@@ -80,7 +80,7 @@ CPA 在 ice 分支被用作"小组 N 个组员共用一个 OpenAI Pro 账号"的
 2026-05-07 在 ice-server 临时打开 `request-log: true`、`debug: true`、`commercial-mode: false`，对 7 笔真实 `/v1/responses` 流量取上下游 header 对照：
 
 - 6 笔 macOS 客户端（UA 含 `Mac OS`）：上游 UA / Originator **原样透传**，未触发覆写分支
-- 1 笔非 macOS 客户端（下游 UA = `Codex-CLI/1.0`）：上游 UA 被覆写为兜底常量 `codexUserAgent`，Originator 联动设为 `codex-tui` ✅
+- 1 笔非 macOS 客户端（下游 UA = `Codex-CLI/1.0`）：上游 UA 被覆写为兜底常量 `codexUserAgent`，Originator 联动设为 `codexOriginator`（`Codex Desktop`） ✅
 
 每条上游 header 也确认带上了**对应组员**的 `Chatgpt-Account-Id`（不同请求不同账号 ID），证明账号路由没被覆写影响。
 

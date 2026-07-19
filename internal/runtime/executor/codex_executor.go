@@ -38,8 +38,8 @@ import (
 )
 
 const (
-	codexUserAgent             = "codex-tui/0.140.0 (Mac OS 26.5.1; arm64) iTerm.app/3.6.8 (codex-tui; 0.140.0)"
-	codexOriginator            = "codex-tui"
+	codexUserAgent             = "Codex Desktop/0.145.0-alpha.18 (Mac OS 26.5.2; arm64) unknown (Codex Desktop; 26.715.31925)"
+	codexOriginator            = "Codex Desktop"
 	codexDefaultImageToolModel = "gpt-image-2"
 	codexResponsesLiteHeader   = "X-OpenAI-Internal-Codex-Responses-Lite"
 	codexResponsesLiteMetadata = "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite"
