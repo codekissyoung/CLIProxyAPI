@@ -2781,6 +2781,24 @@ const xaiFreeUsageExhaustedCooldown = 24 * time.Hour
 // auth cooldown / account rotation. Generic 429s stay without an explicit
 // retry hint so conductor backoff still applies.
 func xaiStatusErr(code int, body []byte) statusErr {
+	if code == http.StatusUnprocessableEntity {
+		// Codex CLI retries 422 in a tight loop, while the Grok gateway uses
+		// it for request-shape failures no retry can fix. Surface a 400
+		// invalid_request_error so the conductor keeps its non-retryable
+		// handling and clients fail fast.
+		message := strings.TrimSpace(gjson.GetBytes(body, "error").String())
+		if message == "" {
+			message = strings.TrimSpace(string(body))
+		}
+		if message == "" {
+			message = http.StatusText(http.StatusUnprocessableEntity)
+		}
+		wrapped := []byte(`{"error":{}}`)
+		wrapped, _ = sjson.SetBytes(wrapped, "error.message", message)
+		wrapped, _ = sjson.SetBytes(wrapped, "error.type", "invalid_request_error")
+		wrapped, _ = sjson.SetBytes(wrapped, "error.code", "invalid_request")
+		return statusErr{code: http.StatusBadRequest, msg: string(wrapped)}
+	}
 	err := statusErr{code: code, msg: string(body)}
 	if code != http.StatusTooManyRequests || len(body) == 0 {
 		return err

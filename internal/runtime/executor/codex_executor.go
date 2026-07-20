@@ -2286,6 +2286,11 @@ func applyCodexHeadersFromSources(r *http.Request, auth *cliproxyauth.Auth, toke
 	misc.EnsureHeader(r.Header, ginHeaders, "X-Codex-Turn-Metadata", "")
 	stripCodexTurnMetadataWorkspaces(r.Header)
 	misc.EnsureHeader(r.Header, ginHeaders, "X-Client-Request-Id", "")
+	// The responses-lite wire shape (developer message with embedded tools)
+	// only deserializes upstream when this marker header travels with the
+	// body; without it the backend rejects lite requests with 422
+	// "did not match any variant of untagged enum ModelInput".
+	misc.EnsureHeader(r.Header, ginHeaders, codexResponsesLiteHeader, "")
 	isAPIKey := codexAuthUsesAPIKey(auth)
 	// cfgUserAgent is empty in the common case (no codex-header-defaults.user-agent
 	// set). The config branch is NOT dead code: an empty cfgUserAgent keeps client-UA
@@ -2358,6 +2363,13 @@ func newCodexStatusErr(statusCode int, body []byte) statusErr {
 		errCode = http.StatusTooManyRequests
 	}
 	body = classifyCodexStatusError(errCode, body)
+	if errCode == http.StatusUnprocessableEntity {
+		// Codex CLI retries 422 in a tight loop, while upstream uses it for
+		// request-shape failures no retry can fix. Surfacing 400 with
+		// invalid_request_error (set by the classification above) keeps the
+		// conductor's non-retryable handling and makes clients fail fast.
+		errCode = http.StatusBadRequest
+	}
 	err := statusErr{code: errCode, msg: string(body)}
 	if retryAfter := parseCodexRetryAfter(errCode, body, time.Now()); retryAfter != nil {
 		err.retryAfter = retryAfter
@@ -2371,6 +2383,11 @@ func classifyCodexStatusError(statusCode int, body []byte) []byte {
 		return body
 	}
 	message := gjson.GetBytes(body, "error.message").String()
+	if message == "" {
+		if errField := gjson.GetBytes(body, "error"); errField.Type == gjson.String {
+			message = errField.String()
+		}
+	}
 	if message == "" {
 		message = gjson.GetBytes(body, "message").String()
 	}
@@ -2406,6 +2423,8 @@ func codexStatusErrorClassification(statusCode int, body []byte) (code string, e
 		return "previous_response_not_found", "invalid_request_error", true
 	case statusCode == http.StatusUnauthorized || upstreamType == "authentication_error" || upstreamCode == "invalid_api_key" || strings.Contains(lower, "invalid or expired token") || strings.Contains(lower, "refresh_token_reused"):
 		return "auth_unavailable", "authentication_error", true
+	case statusCode == http.StatusUnprocessableEntity:
+		return "invalid_request", "invalid_request_error", true
 	default:
 		return "", "", false
 	}
