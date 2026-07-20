@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"net/http"
 	"sort"
@@ -38,12 +39,56 @@ import (
 )
 
 const (
-	codexUserAgent             = "Codex Desktop/0.145.0-alpha.18 (Mac OS 26.5.2; arm64) unknown (Codex Desktop; 26.715.31925)"
+	// codexUserAgent is the default canonical macOS Codex UA — used when no auth
+	// identity is available to key the per-account pool below. It MUST equal
+	// codexFallbackUserAgentPool[0] and MUST be a real, current UA (see the pool
+	// comment). Originator is pinned to codexOriginator, so every pool entry must
+	// be a "Codex Desktop/…" build whose self-reference is "(Codex Desktop; …)".
+	codexUserAgent             = "Codex Desktop/0.145.0-alpha.18 (Mac OS 26.5.2; arm64) unknown (Codex Desktop; 26.715.21425)"
 	codexOriginator            = "Codex Desktop"
 	codexDefaultImageToolModel = "gpt-image-2"
 	codexResponsesLiteHeader   = "X-OpenAI-Internal-Codex-Responses-Lite"
 	codexResponsesLiteMetadata = "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite"
 )
+
+// codexFallbackUserAgentPool holds real macOS Codex Desktop User-Agents observed
+// in our own relay traffic (usage_logs.user_agent, top macOS "Codex Desktop/…"
+// values by 7-day volume as of 2026-07-20). When a cross-platform or empty client
+// UA must be rewritten to hide "same OAuth account, multiple OS", each pool auth
+// is pinned to ONE entry via codexFallbackUserAgent so the forced UA is (a) a real
+// build OpenAI actually sees at scale and (b) stable per account yet spread across
+// accounts, denying a single shared build fingerprint that would correlate the
+// pool's accounts as one relay. Every entry is a genuine, high-frequency UA whose
+// Originator self-reference is "(Codex Desktop; …)" to stay in lockstep with
+// codexOriginator. Refresh from the same query when builds roll forward.
+var codexFallbackUserAgentPool = []string{
+	codexUserAgent, // 0.145.0-alpha.18 / Mac OS 26.5.2 / 26.715.21425 (highest volume)
+	"Codex Desktop/0.145.0-alpha.18 (Mac OS 26.5.2; arm64) unknown (Codex Desktop; 26.715.31925)",
+	"Codex Desktop/0.145.0-alpha.18 (Mac OS 26.5.2; arm64) unknown (Codex Desktop; 26.715.31251)",
+	"Codex Desktop/0.144.2 (Mac OS 26.5.2; arm64) unknown (Codex Desktop; 26.707.72221)",
+	"Codex Desktop/0.144.2 (Mac OS 26.3.1; arm64) unknown (Codex Desktop; 26.707.71524)",
+	"Codex Desktop/0.144.2 (Mac OS 26.3.0; arm64) unknown (Codex Desktop; 26.707.72221)",
+	"Codex Desktop/0.144.2 (Mac OS 15.6.1; arm64) unknown (Codex Desktop; 26.707.72221)",
+	"Codex Desktop/0.144.5 (Mac OS 26.5.2; arm64) unknown (Codex Desktop; 26.707.91948)",
+}
+
+// codexFallbackUserAgent returns the canonical macOS Codex UA to pin for a given
+// pool auth. Selection is a stable FNV hash of auth.ID (the OAuth token filename,
+// the same identity used in logs/metrics), so one account always presents the
+// same forced UA across requests and process restarts, while different accounts
+// spread across the pool. A nil auth or empty ID falls back to codexUserAgent.
+func codexFallbackUserAgent(auth *cliproxyauth.Auth) string {
+	if auth == nil {
+		return codexUserAgent
+	}
+	id := strings.TrimSpace(auth.ID)
+	if id == "" {
+		return codexUserAgent
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(id))
+	return codexFallbackUserAgentPool[h.Sum32()%uint32(len(codexFallbackUserAgentPool))]
+}
 
 var dataTag = []byte("data:")
 
@@ -2297,7 +2342,8 @@ func applyCodexHeadersFromSources(r *http.Request, auth *cliproxyauth.Auth, toke
 	// passthrough AND enables the non-macOS -> macOS hardening below. A non-empty
 	// cfgUserAgent is an explicit admin override that pins the UA and skips hardening.
 	cfgUserAgent, _ := codexHeaderDefaults(cfg, auth)
-	ensureHeaderWithConfigPrecedence(r.Header, ginHeaders, "User-Agent", cfgUserAgent, codexUserAgent)
+	fallbackUserAgent := codexFallbackUserAgent(auth)
+	ensureHeaderWithConfigPrecedence(r.Header, ginHeaders, "User-Agent", cfgUserAgent, fallbackUserAgent)
 
 	// Multi-user Pro account hardening: when the UA flowed through from the
 	// client (no admin-set cfg UA) and doesn't look like a real macOS Codex
@@ -2307,14 +2353,14 @@ func applyCodexHeadersFromSources(r *http.Request, auth *cliproxyauth.Auth, toke
 	// override and the admin owns the consequences.
 	uaForced := false
 	if !isAPIKey && cfgUserAgent == "" && !strings.Contains(r.Header.Get("User-Agent"), "Mac OS") {
-		r.Header.Set("User-Agent", codexUserAgent)
+		r.Header.Set("User-Agent", fallbackUserAgent)
 		uaForced = true
 	}
 
 	// Final safety net: never reach chatgpt.com with Go's default Go-http-client
 	// UA. If every branch above left it empty, pin the canonical Codex UA.
 	if strings.TrimSpace(r.Header.Get("User-Agent")) == "" {
-		r.Header.Set("User-Agent", codexUserAgent)
+		r.Header.Set("User-Agent", fallbackUserAgent)
 	}
 
 	if strings.Contains(r.Header.Get("User-Agent"), "Mac OS") {

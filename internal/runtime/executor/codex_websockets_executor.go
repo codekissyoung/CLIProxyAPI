@@ -1090,21 +1090,22 @@ func applyCodexWebsocketHeaders(ctx context.Context, headers http.Header, auth *
 	misc.EnsureHeader(headers, ginHeaders, "x-client-request-id", "")
 	misc.EnsureHeader(headers, ginHeaders, "x-responsesapi-include-timing-metrics", "")
 	misc.EnsureHeader(headers, ginHeaders, "Version", "")
+	fallbackUserAgent := codexFallbackUserAgent(auth)
 	uaForced := false
 	if isAPIKey {
 		// API-key clients keep their own UA (no macOS hardening), but never let it
 		// fall through to Go's default Go-http-client UA: when the client sends no
 		// UA, fall back to codexUserAgent. Mirrors the REST API-key path.
-		ensureHeaderWithPriority(headers, ginHeaders, "User-Agent", "", codexUserAgent)
+		ensureHeaderWithPriority(headers, ginHeaders, "User-Agent", "", fallbackUserAgent)
 	} else {
-		ensureHeaderWithConfigPrecedence(headers, ginHeaders, "User-Agent", cfgUserAgent, codexUserAgent)
+		ensureHeaderWithConfigPrecedence(headers, ginHeaders, "User-Agent", cfgUserAgent, fallbackUserAgent)
 		// Multi-user Pro account hardening: align cross-platform clients to
 		// the canonical macOS UA so a single OAuth account never surfaces as
 		// "same user, multiple OS" upstream. Mirrors applyCodexHeaders. Only
 		// kicks in when admin hasn't set a cfg UA — explicit admin overrides
 		// are respected.
 		if cfgUserAgent == "" && !strings.Contains(headers.Get("User-Agent"), "Mac OS") {
-			headers.Set("User-Agent", codexUserAgent)
+			headers.Set("User-Agent", fallbackUserAgent)
 			uaForced = true
 		}
 	}
@@ -1113,7 +1114,7 @@ func applyCodexWebsocketHeaders(ctx context.Context, headers http.Header, auth *
 	// with Go's default Go-http-client UA. If every branch above left it empty
 	// (e.g. an API-key client that sent no UA), pin the canonical Codex UA.
 	if strings.TrimSpace(headers.Get("User-Agent")) == "" {
-		headers.Set("User-Agent", codexUserAgent)
+		headers.Set("User-Agent", fallbackUserAgent)
 	}
 
 	betaHeader := strings.TrimSpace(headers.Get("OpenAI-Beta"))
