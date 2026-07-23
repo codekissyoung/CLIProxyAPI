@@ -100,6 +100,10 @@ type Config struct {
 	// When <= 0, the default worker count is used.
 	AuthAutoRefreshWorkers int `yaml:"auth-auto-refresh-workers" json:"auth-auto-refresh-workers"`
 
+	// XAIOAuthMaxConcurrency limits concurrent in-flight requests per xAI OAuth credential.
+	// Set to 0 or a negative value to disable the standalone limiter.
+	XAIOAuthMaxConcurrency int `yaml:"xai-oauth-max-concurrency" json:"xai-oauth-max-concurrency"`
+
 	// RequestRetry defines the retry times when the request failed.
 	RequestRetry int `yaml:"request-retry" json:"request-retry"`
 	// MaxRetryCredentials defines the maximum number of credentials to try for a failed request.
@@ -838,6 +842,9 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 
 	if cfg.MaxRetryCredentials < 0 {
 		cfg.MaxRetryCredentials = 0
+	}
+	if cfg.XAIOAuthMaxConcurrency < 0 {
+		cfg.XAIOAuthMaxConcurrency = 0
 	}
 
 	cfg.NormalizePluginsConfig()

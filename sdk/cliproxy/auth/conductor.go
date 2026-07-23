@@ -272,6 +272,9 @@ type Manager struct {
 	// refreshLocks serializes credential refresh per auth ID so concurrent
 	// 401 recoveries and auto-refresh workers do not race the same refresh_token.
 	refreshLocks sync.Map
+
+	xaiOAuthConcurrencyMu sync.Mutex
+	xaiOAuthInFlight      map[string]int
 }
 
 // NewManager constructs a manager with optional custom selector and hook.
@@ -293,6 +296,7 @@ func NewManager(store Store, selector Selector, hook Hook) *Manager {
 		homeSessionSelections: make(map[string]map[homeSessionSelectionKey]*HomeDispatchSelection),
 		providerOffsets:       make(map[string]int),
 		modelPoolOffsets:      make(map[string]int),
+		xaiOAuthInFlight:      make(map[string]int),
 	}
 	// atomic.Value requires non-nil initial value.
 	manager.runtimeConfig.Store(&internalconfig.Config{})
@@ -2935,6 +2939,7 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 	tried := make(map[string]struct{})
 	attempted := make(map[string]struct{})
 	var lastErr error
+	concurrencyBusy := false
 	for {
 		if !homeMode && maxRetryCredentials > 0 && len(attempted) >= maxRetryCredentials {
 			if lastErr != nil {
@@ -2948,10 +2953,19 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 		}
 		auth, executor, provider, errPick := m.pickNextMixed(ctx, providers, routeModel, pickOpts, tried)
 		if errPick != nil {
+			if !homeMode && concurrencyBusy && lastErr == nil {
+				return cliproxyexecutor.Response{}, newXAIOAuthConcurrencyBusyError()
+			}
 			if shouldReturnLastErrorOnPickFailure(homeMode, lastErr, errPick) {
 				return cliproxyexecutor.Response{}, lastErr
 			}
 			return cliproxyexecutor.Response{}, errPick
+		}
+		releaseConcurrency, acquiredConcurrency := m.acquireXAIOAuthConcurrency(auth)
+		if !acquiredConcurrency {
+			tried[auth.ID] = struct{}{}
+			concurrencyBusy = true
+			continue
 		}
 
 		entry := logEntryWithRequestID(ctx)
@@ -2968,6 +2982,7 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 
 		models, pooled, aliasResult := m.preparedExecutionModelsWithAlias(auth, routeModel)
 		if len(models) == 0 {
+			releaseConcurrency()
 			continue
 		}
 		attempted[auth.ID] = struct{}{}
@@ -2976,6 +2991,7 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 		if errPrepare != nil {
 			result := Result{AuthID: auth.ID, Provider: provider, Model: routeModel, Success: false, Error: resultErrorFromError(errPrepare)}
 			m.MarkResult(execCtx, result)
+			releaseConcurrency()
 			lastErr = errPrepare
 			continue
 		}
@@ -2993,6 +3009,7 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 			resp, errExec := executor.Execute(execCtx, auth, execReq, execOpts)
 			if errExec != nil {
 				if errCtx := execCtx.Err(); errCtx != nil {
+					releaseConcurrency()
 					return cliproxyexecutor.Response{}, errCtx
 				}
 				if refreshed, okRefresh := m.tryRefreshAfterUnauthorized(execCtx, auth, errExec, didRefreshOnUnauthorized); okRefresh {
@@ -3001,6 +3018,7 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 					resp, errExec = executor.Execute(execCtx, auth, execReq, execOpts)
 					if errExec != nil {
 						if errCtx := execCtx.Err(); errCtx != nil {
+							releaseConcurrency()
 							return cliproxyexecutor.Response{}, errCtx
 						}
 					}
@@ -3014,6 +3032,7 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 				}
 				m.MarkResult(execCtx, result)
 				if isRequestInvalidError(errExec) {
+					releaseConcurrency()
 					return cliproxyexecutor.Response{}, errExec
 				}
 				authErr = errExec
@@ -3021,8 +3040,10 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 			}
 			m.MarkResult(execCtx, result)
 			rewriteForceMappedResponse(&resp, aliasResult)
+			releaseConcurrency()
 			return resp, nil
 		}
+		releaseConcurrency()
 		if authErr != nil {
 			if isRequestInvalidError(authErr) {
 				return cliproxyexecutor.Response{}, authErr
@@ -3048,6 +3069,7 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 	tried := make(map[string]struct{})
 	attempted := make(map[string]struct{})
 	var lastErr error
+	concurrencyBusy := false
 	for {
 		if !homeMode && maxRetryCredentials > 0 && len(attempted) >= maxRetryCredentials {
 			if lastErr != nil {
@@ -3061,10 +3083,19 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 		}
 		auth, executor, provider, errPick := m.pickNextMixed(ctx, providers, routeModel, pickOpts, tried)
 		if errPick != nil {
+			if !homeMode && concurrencyBusy && lastErr == nil {
+				return cliproxyexecutor.Response{}, newXAIOAuthConcurrencyBusyError()
+			}
 			if shouldReturnLastErrorOnPickFailure(homeMode, lastErr, errPick) {
 				return cliproxyexecutor.Response{}, lastErr
 			}
 			return cliproxyexecutor.Response{}, errPick
+		}
+		releaseConcurrency, acquiredConcurrency := m.acquireXAIOAuthConcurrency(auth)
+		if !acquiredConcurrency {
+			tried[auth.ID] = struct{}{}
+			concurrencyBusy = true
+			continue
 		}
 
 		entry := logEntryWithRequestID(ctx)
@@ -3081,6 +3112,7 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 
 		models, pooled, aliasResult := m.preparedExecutionModelsWithAlias(auth, routeModel)
 		if len(models) == 0 {
+			releaseConcurrency()
 			continue
 		}
 		attempted[auth.ID] = struct{}{}
@@ -3089,6 +3121,7 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 		if errPrepare != nil {
 			result := Result{AuthID: auth.ID, Provider: provider, Model: routeModel, Success: false, Error: resultErrorFromError(errPrepare)}
 			m.MarkResult(execCtx, result)
+			releaseConcurrency()
 			lastErr = errPrepare
 			continue
 		}
@@ -3106,6 +3139,7 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 			resp, errExec := executor.CountTokens(execCtx, auth, execReq, execOpts)
 			if errExec != nil {
 				if errCtx := execCtx.Err(); errCtx != nil {
+					releaseConcurrency()
 					return cliproxyexecutor.Response{}, errCtx
 				}
 				if refreshed, okRefresh := m.tryRefreshAfterUnauthorized(execCtx, auth, errExec, didRefreshOnUnauthorized); okRefresh {
@@ -3114,6 +3148,7 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 					resp, errExec = executor.CountTokens(execCtx, auth, execReq, execOpts)
 					if errExec != nil {
 						if errCtx := execCtx.Err(); errCtx != nil {
+							releaseConcurrency()
 							return cliproxyexecutor.Response{}, errCtx
 						}
 					}
@@ -3135,6 +3170,7 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 					m.MarkResult(execCtx, result)
 				}
 				if isRequestInvalidError(errExec) {
+					releaseConcurrency()
 					return cliproxyexecutor.Response{}, errExec
 				}
 				authErr = errExec
@@ -3142,8 +3178,10 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 			}
 			m.MarkResult(execCtx, result)
 			rewriteForceMappedResponse(&resp, aliasResult)
+			releaseConcurrency()
 			return resp, nil
 		}
+		releaseConcurrency()
 		if authErr != nil {
 			if isRequestInvalidError(authErr) {
 				return cliproxyexecutor.Response{}, authErr
@@ -3170,6 +3208,7 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 	tried := make(map[string]struct{})
 	attempted := make(map[string]struct{})
 	var lastErr error
+	concurrencyBusy := false
 	for {
 		if !homeMode && maxRetryCredentials > 0 && len(attempted) >= maxRetryCredentials {
 			if lastErr != nil {
@@ -3198,6 +3237,9 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 			auth, executor, provider, errPick = m.pickNextMixed(ctx, providers, routeModel, pickOpts, tried)
 		}
 		if errPick != nil {
+			if !homeMode && concurrencyBusy && lastErr == nil {
+				return nil, newXAIOAuthConcurrencyBusyError()
+			}
 			if shouldReturnLastErrorOnPickFailure(homeMode, lastErr, errPick) {
 				return nil, lastErr
 			}
@@ -3209,11 +3251,22 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 			}
 			return nil, &Error{Code: "executor_not_found", Message: "executor not registered"}
 		}
+		releaseConcurrency := func() {}
+		if !homeMode {
+			var acquiredConcurrency bool
+			releaseConcurrency, acquiredConcurrency = m.acquireXAIOAuthConcurrency(auth)
+			if !acquiredConcurrency {
+				tried[auth.ID] = struct{}{}
+				concurrencyBusy = true
+				continue
+			}
+		}
 
 		entry := logEntryWithRequestID(ctx)
 		debugLogAuthSelection(entry, auth, provider, routeModel)
 		if selection != nil {
 			if errRuntimeAuth := m.bindHomeSelectionRuntimeAuth(ctx, opts, selection); errRuntimeAuth != nil {
+				releaseConcurrency()
 				selection.End("runtime_auth_bind_failed")
 				return nil, errRuntimeAuth
 			}
@@ -3240,6 +3293,7 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 			aliasResult.OriginalAlias = responseAlias
 		}
 		if len(models) == 0 {
+			releaseConcurrency()
 			if selection != nil {
 				releaseAttempt()
 				if errEnd := m.endHomeSelectionBeforeRedispatch(ctx, selection, "no_execution_models"); errEnd != nil {
@@ -3263,6 +3317,7 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 			} else {
 				m.MarkResult(execCtx, result)
 			}
+			releaseConcurrency()
 			lastErr = errPrepare
 			if selection != nil {
 				if errEnd := m.endHomeSelectionBeforeRedispatch(ctx, selection, "prepare_failed"); errEnd != nil {
@@ -3286,6 +3341,7 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 		}
 		streamResult, errStream := m.executeStreamWithModelPool(execCtx, executor, auth, provider, execReq, execOpts, routeModel, streamExecutionModel, models, pooled, aliasResult, !homeMode, selection != nil)
 		if errStream != nil {
+			releaseConcurrency()
 			if selection != nil {
 				releaseAttempt()
 				if errEnd := m.endHomeSelectionBeforeRedispatch(ctx, selection, "stream_start_failed"); errEnd != nil {
@@ -3310,8 +3366,40 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 			}
 			return wrapHomeStream(ctx, streamResult, selection, releaseAttempt), nil
 		}
-		return streamResult, nil
+		return wrapStreamConcurrencyRelease(ctx, streamResult, releaseConcurrency), nil
 	}
+}
+
+func wrapStreamConcurrencyRelease(ctx context.Context, result *cliproxyexecutor.StreamResult, release func()) *cliproxyexecutor.StreamResult {
+	if result == nil || result.Chunks == nil {
+		if release != nil {
+			release()
+		}
+		return result
+	}
+	out := make(chan cliproxyexecutor.StreamChunk)
+	go func() {
+		defer close(out)
+		if release != nil {
+			defer release()
+		}
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case chunk, ok := <-result.Chunks:
+				if !ok {
+					return
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case out <- chunk:
+				}
+			}
+		}
+	}()
+	return &cliproxyexecutor.StreamResult{Headers: result.Headers, Chunks: out}
 }
 
 func homeExecutionAttemptContext(ctx context.Context, selection *HomeDispatchSelection) (context.Context, func(), error) {
@@ -4205,6 +4293,9 @@ func (m *Manager) shouldRetryAfterError(err error, attempt int, providers []stri
 	}
 	var homeBusy *HomeConcurrencyBusyError
 	if errors.As(err, &homeBusy) && homeBusy != nil {
+		return 0, false
+	}
+	if xaiOAuthConcurrencyBusy(err) {
 		return 0, false
 	}
 	if maxWait <= 0 {

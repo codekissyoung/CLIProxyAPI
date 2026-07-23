@@ -187,6 +187,10 @@ video-result-auth-cache-ttl: "3h"
 # When > 0, overrides the default worker count (16).
 # auth-auto-refresh-workers: 16
 
+# Maximum concurrent in-flight requests per xAI OAuth credential.
+# Set to 0 to disable the standalone limiter. This does not apply in Home mode.
+xai-oauth-max-concurrency: 0
+
 # Quota exceeded behavior
 quota-exceeded:
   switch-project: true # Whether to automatically switch to another project when a quota is exceeded
