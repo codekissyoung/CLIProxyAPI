@@ -566,3 +566,128 @@ func convertSystemRoleToDeveloperPreviousRootPathRewriteForBenchmark(rawJSON []b
 
 	return result
 }
+
+func TestResponseFormatMappedToTextFormat(t *testing.T) {
+	inputJSON := []byte(`{
+		"model": "gpt-5.2",
+		"response_format": {
+			"type": "json_schema",
+			"json_schema": {
+				"name": "answer",
+				"strict": true,
+				"schema": {"type": "object", "properties": {"a": {"type": "string"}}}
+			}
+		},
+		"input": [{"role": "user", "content": "hello"}]
+	}`)
+
+	output := ConvertOpenAIResponsesRequestToCodex("gpt-5.2", inputJSON, false)
+	outputStr := string(output)
+
+	if gjson.Get(outputStr, "response_format").Exists() {
+		t.Fatalf("response_format should be removed for Codex compatibility")
+	}
+	if got := gjson.Get(outputStr, "text.format.type").String(); got != "json_schema" {
+		t.Errorf("text.format.type = %q, want %q", got, "json_schema")
+	}
+	if got := gjson.Get(outputStr, "text.format.name").String(); got != "answer" {
+		t.Errorf("text.format.name = %q, want %q", got, "answer")
+	}
+	if got := gjson.Get(outputStr, "text.format.strict").Bool(); got != true {
+		t.Errorf("text.format.strict = %v, want true", got)
+	}
+	if got := gjson.Get(outputStr, "text.format.schema.properties.a.type").String(); got != "string" {
+		t.Errorf("text.format.schema.properties.a.type = %q, want %q", got, "string")
+	}
+}
+
+func TestResponseFormatTextTypeMapped(t *testing.T) {
+	inputJSON := []byte(`{
+		"model": "gpt-5.2",
+		"response_format": {"type": "text"},
+		"input": [{"role": "user", "content": "hello"}]
+	}`)
+
+	output := ConvertOpenAIResponsesRequestToCodex("gpt-5.2", inputJSON, false)
+	outputStr := string(output)
+
+	if gjson.Get(outputStr, "response_format").Exists() {
+		t.Fatalf("response_format should be removed for Codex compatibility")
+	}
+	if got := gjson.Get(outputStr, "text.format.type").String(); got != "text" {
+		t.Errorf("text.format.type = %q, want %q", got, "text")
+	}
+}
+
+func TestResponseFormatUnsupportedTypeDropped(t *testing.T) {
+	inputJSON := []byte(`{
+		"model": "gpt-5.2",
+		"response_format": {"type": "json_object"},
+		"input": [{"role": "user", "content": "hello"}]
+	}`)
+
+	output := ConvertOpenAIResponsesRequestToCodex("gpt-5.2", inputJSON, false)
+	outputStr := string(output)
+
+	if gjson.Get(outputStr, "response_format").Exists() {
+		t.Fatalf("response_format should be removed for Codex compatibility")
+	}
+	if gjson.Get(outputStr, "text.format.type").Exists() {
+		t.Errorf("text.format.type should not be set for unsupported response_format type, got %q", gjson.Get(outputStr, "text.format.type").String())
+	}
+}
+
+func TestResponseFormatDoesNotOverrideExistingTextFormat(t *testing.T) {
+	inputJSON := []byte(`{
+		"model": "gpt-5.2",
+		"text": {"format": {"type": "text"}, "verbosity": "low"},
+		"response_format": {"type": "json_schema", "json_schema": {"name": "x", "schema": {"type": "object"}}},
+		"input": [{"role": "user", "content": "hello"}]
+	}`)
+
+	output := ConvertOpenAIResponsesRequestToCodex("gpt-5.2", inputJSON, false)
+	outputStr := string(output)
+
+	if gjson.Get(outputStr, "response_format").Exists() {
+		t.Fatalf("response_format should be removed for Codex compatibility")
+	}
+	if got := gjson.Get(outputStr, "text.format.type").String(); got != "text" {
+		t.Errorf("text.format.type = %q, want existing %q preserved", got, "text")
+	}
+	if got := gjson.Get(outputStr, "text.verbosity").String(); got != "low" {
+		t.Errorf("text.verbosity = %q, want %q", got, "low")
+	}
+}
+
+func TestMetadataFieldDeletion(t *testing.T) {
+	inputJSON := []byte(`{
+		"model": "gpt-5.2",
+		"metadata": {"session": "abc"},
+		"input": [{"role": "user", "content": "hello"}]
+	}`)
+
+	output := ConvertOpenAIResponsesRequestToCodex("gpt-5.2", inputJSON, false)
+	outputStr := string(output)
+
+	if gjson.Get(outputStr, "metadata").Exists() {
+		t.Errorf("metadata field should be deleted, but it was found with value: %s", gjson.Get(outputStr, "metadata").Raw)
+	}
+}
+
+func TestSamplingPenaltyFieldsDeletion(t *testing.T) {
+	inputJSON := []byte(`{
+		"model": "gpt-5.2",
+		"presence_penalty": 0.5,
+		"frequency_penalty": 0.2,
+		"input": [{"role": "user", "content": "hello"}]
+	}`)
+
+	output := ConvertOpenAIResponsesRequestToCodex("gpt-5.2", inputJSON, false)
+	outputStr := string(output)
+
+	for _, path := range []string{"presence_penalty", "frequency_penalty"} {
+		if gjson.Get(outputStr, path).Exists() {
+			t.Errorf("%s field should be deleted, but it was found with value: %s", path, gjson.Get(outputStr, path).Raw)
+		}
+	}
+}

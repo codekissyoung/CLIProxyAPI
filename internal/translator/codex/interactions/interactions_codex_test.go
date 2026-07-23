@@ -218,3 +218,40 @@ func codexInteractionsFrameEventName(event []byte) string {
 	}
 	return ""
 }
+
+func TestConvertInteractionsRequestToCodexMapsResponseFormatToTextFormat(t *testing.T) {
+	out := ConvertInteractionsRequestToCodex("codex-test", []byte(`{"model":"codex-test","generation_config":{"response_format":{"type":"json_schema","json_schema":{"name":"answer","strict":true,"schema":{"type":"object","properties":{"a":{"type":"string"}}}}},"input":"hi"}`), false)
+
+	if gjson.GetBytes(out, "response_format").Exists() {
+		t.Fatalf("response_format should be removed for Codex compatibility. Output: %s", string(out))
+	}
+	if got := gjson.GetBytes(out, "text.format.type").String(); got != "json_schema" {
+		t.Fatalf("text.format.type = %q, want json_schema. Output: %s", got, string(out))
+	}
+	if got := gjson.GetBytes(out, "text.format.name").String(); got != "answer" {
+		t.Fatalf("text.format.name = %q, want answer. Output: %s", got, string(out))
+	}
+	if got := gjson.GetBytes(out, "text.format.schema.properties.a.type").String(); got != "string" {
+		t.Fatalf("text.format.schema.properties.a.type = %q, want string. Output: %s", got, string(out))
+	}
+}
+
+func TestConvertInteractionsRequestToCodexStripsUnsupportedGenerationConfig(t *testing.T) {
+	out := ConvertInteractionsRequestToCodex("codex-test", []byte(`{"model":"codex-test","generation_config":{"temperature":0.7,"top_p":0.9,"max_output_tokens":128,"presence_penalty":0.5,"frequency_penalty":0.2,"truncation":"auto"},"input":"hi"}`), false)
+
+	for _, path := range []string{"temperature", "top_p", "max_output_tokens", "presence_penalty", "frequency_penalty", "truncation"} {
+		if gjson.GetBytes(out, path).Exists() {
+			t.Fatalf("%s should be removed for Codex compatibility. Output: %s", path, string(out))
+		}
+	}
+}
+
+func TestConvertInteractionsRequestToCodexStripsTopLevelMetadataAndTruncation(t *testing.T) {
+	out := ConvertInteractionsRequestToCodex("codex-test", []byte(`{"model":"codex-test","metadata":{"session":"abc"},"truncation":"auto","input":"hi"}`), false)
+
+	for _, path := range []string{"metadata", "truncation"} {
+		if gjson.GetBytes(out, path).Exists() {
+			t.Fatalf("%s should be removed for Codex compatibility. Output: %s", path, string(out))
+		}
+	}
+}

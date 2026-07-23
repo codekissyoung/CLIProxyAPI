@@ -2,6 +2,7 @@ package responses
 
 import (
 	"encoding/json"
+	"strings"
 
 	translatorcommon "github.com/router-for-me/CLIProxyAPI/v7/internal/translator/common"
 	log "github.com/sirupsen/logrus"
@@ -23,8 +24,50 @@ func ConvertOpenAIResponsesRequestToCodex(modelName string, inputRawJSON []byte,
 	rawJSON = setCodexRequiredBool(rawJSON, "store", false)
 	rawJSON = setCodexRequiredBool(rawJSON, "parallel_tool_calls", true)
 	rawJSON = setCodexRequiredInclude(rawJSON)
-	// Codex Responses rejects token limit fields, so strip them out before forwarding.
-	rawJSON = deleteCodexRequestFields(rawJSON, "max_output_tokens", "max_completion_tokens", "temperature", "top_p")
+
+	rawJSON = SanitizeCodexResponsesRequest(rawJSON)
+
+	// Convert role "system" to "developer" in input array to comply with Codex API requirements.
+	rawJSON = convertSystemRoleToDeveloperWithInput(rawJSON, inputResult)
+	rawJSON = normalizeCodexBuiltinTools(rawJSON)
+
+	return rawJSON
+}
+
+// SanitizeCodexResponsesRequest drops or rewrites top-level request fields that the
+// Codex upstream rejects with {"detail":"Unsupported parameter: ..."}. It is shared
+// by every translator path that forwards to Codex (OpenAI Responses, Interactions)
+// so unsupported client parameters never reach the upstream account.
+//
+// Every sanitized request is logged at warn level (field names only, never values)
+// so stripped parameters stay observable in Loki instead of disappearing silently.
+func SanitizeCodexResponsesRequest(rawJSON []byte) []byte {
+	var dropped []string
+	for _, path := range []string{
+		"max_output_tokens", "max_completion_tokens",
+		"temperature", "top_p", "presence_penalty", "frequency_penalty",
+		"truncation", "context_management", "metadata", "user",
+	} {
+		if gjson.GetBytes(rawJSON, path).Exists() {
+			dropped = append(dropped, path)
+		}
+	}
+	if serviceTier := gjson.GetBytes(rawJSON, "service_tier"); serviceTier.Exists() && serviceTier.String() != "priority" {
+		dropped = append(dropped, "service_tier")
+	}
+	responseFormat := ""
+	if rf := gjson.GetBytes(rawJSON, "response_format"); rf.Exists() {
+		responseFormat = "dropped"
+		if !gjson.GetBytes(rawJSON, "text.format.type").Exists() {
+			switch rf.Get("type").String() {
+			case "text", "json_schema":
+				responseFormat = "mapped_to_text_format"
+			}
+		}
+	}
+
+	// Codex Responses rejects token limit and sampling fields, so strip them out before forwarding.
+	rawJSON = deleteCodexRequestFields(rawJSON, "max_output_tokens", "max_completion_tokens", "temperature", "top_p", "presence_penalty", "frequency_penalty")
 	if serviceTier := gjson.GetBytes(rawJSON, "service_tier"); serviceTier.Exists() && serviceTier.String() != "priority" {
 		rawJSON = deleteCodexRequestFields(rawJSON, "service_tier")
 	}
@@ -32,12 +75,24 @@ func ConvertOpenAIResponsesRequestToCodex(modelName string, inputRawJSON []byte,
 	rawJSON = deleteCodexRequestFields(rawJSON, "truncation")
 	rawJSON = applyResponsesCompactionCompatibility(rawJSON)
 
+	// Codex Responses rejects chat-style response_format and metadata; map
+	// response_format to text.format when possible and drop both.
+	rawJSON = mapResponsesResponseFormatToTextFormat(rawJSON)
+	rawJSON = deleteCodexRequestFields(rawJSON, "metadata")
+
 	// Delete the user field as it is not supported by the Codex upstream.
 	rawJSON = deleteCodexRequestFields(rawJSON, "user")
 
-	// Convert role "system" to "developer" in input array to comply with Codex API requirements.
-	rawJSON = convertSystemRoleToDeveloperWithInput(rawJSON, inputResult)
-	rawJSON = normalizeCodexBuiltinTools(rawJSON)
+	if len(dropped) > 0 || responseFormat != "" {
+		fields := log.Fields{}
+		if len(dropped) > 0 {
+			fields["dropped_fields"] = strings.Join(dropped, ",")
+		}
+		if responseFormat != "" {
+			fields["response_format"] = responseFormat
+		}
+		log.WithFields(fields).Warn("codex request sanitized: unsupported client parameters stripped before forwarding")
+	}
 
 	return rawJSON
 }
@@ -97,6 +152,47 @@ func applyResponsesCompactionCompatibility(rawJSON []byte) []byte {
 	}
 
 	rawJSON, _ = sjson.DeleteBytes(rawJSON, "context_management")
+	return rawJSON
+}
+
+// mapResponsesResponseFormatToTextFormat converts a Chat Completions style
+// response_format field into the Responses API text.format object, then removes
+// response_format. Codex upstream rejects the raw field with
+// {"detail":"Unsupported parameter: response_format"}.
+//
+// Only "text" and "json_schema" are mapped (mirroring the chat-completions
+// translator); other types are dropped without mapping. An existing
+// text.format.type is left untouched.
+func mapResponsesResponseFormatToTextFormat(rawJSON []byte) []byte {
+	rf := gjson.GetBytes(rawJSON, "response_format")
+	if !rf.Exists() {
+		return rawJSON
+	}
+
+	if !gjson.GetBytes(rawJSON, "text.format.type").Exists() {
+		switch rf.Get("type").String() {
+		case "text":
+			rawJSON, _ = sjson.SetBytes(rawJSON, "text.format.type", "text")
+		case "json_schema":
+			if js := rf.Get("json_schema"); js.Exists() {
+				rawJSON, _ = sjson.SetBytes(rawJSON, "text.format.type", "json_schema")
+				if v := js.Get("name"); v.Exists() {
+					rawJSON, _ = sjson.SetBytes(rawJSON, "text.format.name", v.Value())
+				}
+				if v := js.Get("strict"); v.Exists() {
+					rawJSON, _ = sjson.SetBytes(rawJSON, "text.format.strict", v.Value())
+				}
+				if v := js.Get("schema"); v.Exists() {
+					rawJSON, _ = sjson.SetRawBytes(rawJSON, "text.format.schema", []byte(v.Raw))
+				}
+			}
+		}
+	}
+
+	updated, errDelete := sjson.DeleteBytes(rawJSON, "response_format")
+	if errDelete == nil {
+		rawJSON = updated
+	}
 	return rawJSON
 }
 

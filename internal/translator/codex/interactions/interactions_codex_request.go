@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/thinking"
+	codexresponses "github.com/router-for-me/CLIProxyAPI/v7/internal/translator/codex/openai/responses"
 	translatorcommon "github.com/router-for-me/CLIProxyAPI/v7/internal/translator/common"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -25,6 +26,10 @@ func ConvertInteractionsRequestToCodex(modelName string, inputRawJSON []byte, st
 	out = translatorcommon.SetRawArrayItems(out, "input", inputItems)
 	out = copyInteractionsToolsToCodex(out, root)
 	out = copyInteractionsCodexTopLevel(out, root)
+	// Final gate: generation_config/top-level copies above may carry fields the
+	// Codex upstream rejects (response_format, metadata, sampling/token limits,
+	// truncation); sanitize so they never reach the upstream account.
+	out = codexresponses.SanitizeCodexResponsesRequest(out)
 	return out
 }
 
