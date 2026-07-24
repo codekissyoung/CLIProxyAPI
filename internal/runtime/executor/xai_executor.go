@@ -154,6 +154,7 @@ func (e *XAIExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req 
 		return resp, err
 	}
 	applyXAIChatHeaders(httpReq, auth, token, true, prepared.sessionID)
+	applyXAIGrokCLIClientVersion(httpReq, baseURL, prepared.grokCLIClientVersion)
 	e.recordXAIRequest(ctx, auth, url, httpReq.Header.Clone(), prepared.body)
 
 	httpClient := helps.NewProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
@@ -194,9 +195,12 @@ func (e *XAIExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req 
 		if !bytes.HasPrefix(line, xaiDataTag) {
 			continue
 		}
-		eventData := xaiNormalizeReasoningSummaryData(bytes.TrimSpace(line[len(xaiDataTag):]))
-		eventData = restoreXAINamespaceToolCalls(eventData, prepared.namespaceTools)
-		eventData = responseFilter.apply(eventData)
+		eventData := bytes.TrimSpace(line[len(xaiDataTag):])
+		if !prepared.nativeGrokCLI {
+			eventData = xaiNormalizeReasoningSummaryData(eventData)
+			eventData = restoreXAINamespaceToolCalls(eventData, prepared.namespaceTools)
+			eventData = responseFilter.apply(eventData)
+		}
 		if len(eventData) == 0 {
 			continue
 		}
@@ -208,8 +212,10 @@ func (e *XAIExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req 
 				reporter.Publish(ctx, detail)
 			}
 			completedData := xaiPatchCompletedOutput(eventData, outputItemsByIndex, outputItemsFallback)
-			completedData = xaiNormalizeReasoningSummaryData(completedData)
-			cacheXAIReasoningReplayFromCompleted(ctx, prepared.replayScope, completedData)
+			if !prepared.nativeGrokCLI {
+				completedData = xaiNormalizeReasoningSummaryData(completedData)
+				cacheXAIReasoningReplayFromCompleted(ctx, prepared.replayScope, completedData)
+			}
 			var param any
 			out := sdktranslator.TranslateNonStream(ctx, prepared.to, prepared.responseFormat, req.Model, prepared.originalPayload, prepared.body, completedData, &param)
 			return cliproxyexecutor.Response{Payload: out, Headers: httpResp.Header.Clone()}, nil
@@ -635,6 +641,7 @@ func (e *XAIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth
 		return nil, err
 	}
 	applyXAIChatHeaders(httpReq, auth, token, true, prepared.sessionID)
+	applyXAIGrokCLIClientVersion(httpReq, baseURL, prepared.grokCLIClientVersion)
 	e.recordXAIRequest(ctx, auth, url, httpReq.Header.Clone(), prepared.body)
 
 	httpClient := helps.NewProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
@@ -691,7 +698,7 @@ func (e *XAIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth
 			helps.AppendAPIResponseChunk(ctx, e.cfg, line)
 
 			if bytes.HasPrefix(line, xaiEventTag) {
-				if pendingEventLine != nil && !emitTranslatedLine(xaiNormalizeReasoningSummaryEventLine(pendingEventLine, "")) {
+				if pendingEventLine != nil && !emitTranslatedLine(xaiResponseEventLine(prepared, pendingEventLine, "")) {
 					return
 				}
 				pendingEventLine = bytes.Clone(line)
@@ -699,11 +706,13 @@ func (e *XAIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth
 			}
 
 			if bytes.HasPrefix(line, xaiDataTag) {
-				eventDataList := xaiNormalizeReasoningSummaryDataEvents(bytes.TrimSpace(line[len(xaiDataTag):]))
+				eventDataList := xaiResponseDataEvents(prepared, bytes.TrimSpace(line[len(xaiDataTag):]))
 				hasPendingEventLine := pendingEventLine != nil
 				for i, eventData := range eventDataList {
-					eventData = restoreXAINamespaceToolCalls(eventData, prepared.namespaceTools)
-					eventData = responseFilter.apply(eventData)
+					if !prepared.nativeGrokCLI {
+						eventData = restoreXAINamespaceToolCalls(eventData, prepared.namespaceTools)
+						eventData = responseFilter.apply(eventData)
+					}
 					if len(eventData) == 0 {
 						if hasPendingEventLine && i == 0 {
 							pendingEventLine = nil
@@ -719,15 +728,17 @@ func (e *XAIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth
 							reporter.Publish(ctx, detail)
 						}
 						eventData = xaiPatchCompletedOutput(eventData, outputItemsByIndex, outputItemsFallback)
-						eventData = xaiNormalizeReasoningSummaryData(eventData)
-						cacheXAIReasoningReplayFromCompleted(ctx, prepared.replayScope, eventData)
+						if !prepared.nativeGrokCLI {
+							eventData = xaiNormalizeReasoningSummaryData(eventData)
+							cacheXAIReasoningReplayFromCompleted(ctx, prepared.replayScope, eventData)
+						}
 						normalizedEventName = gjson.GetBytes(eventData, "type").String()
 					}
 
 					if hasPendingEventLine {
 						eventLine := []byte("event: " + normalizedEventName)
 						if i == 0 {
-							eventLine = xaiNormalizeReasoningSummaryEventLine(pendingEventLine, normalizedEventName)
+							eventLine = xaiResponseEventLine(prepared, pendingEventLine, normalizedEventName)
 							pendingEventLine = nil
 						}
 						if !emitTranslatedLine(eventLine) {
@@ -742,7 +753,7 @@ func (e *XAIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth
 			}
 
 			if pendingEventLine != nil {
-				if !emitTranslatedLine(xaiNormalizeReasoningSummaryEventLine(pendingEventLine, "")) {
+				if !emitTranslatedLine(xaiResponseEventLine(prepared, pendingEventLine, "")) {
 					return
 				}
 				pendingEventLine = nil
@@ -752,7 +763,7 @@ func (e *XAIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth
 			}
 		}
 		if pendingEventLine != nil {
-			emitTranslatedLine(xaiNormalizeReasoningSummaryEventLine(pendingEventLine, ""))
+			emitTranslatedLine(xaiResponseEventLine(prepared, pendingEventLine, ""))
 		}
 		if errScan := scanner.Err(); errScan != nil {
 			helps.RecordAPIResponseError(ctx, e.cfg, errScan)
@@ -977,6 +988,8 @@ type xaiPreparedRequest struct {
 	sessionID             string
 	replayScope           xaiReasoningReplayScope
 	filterInternalXSearch bool
+	nativeGrokCLI         bool
+	grokCLIClientVersion  string
 }
 
 type xaiNamespaceToolRef struct {
@@ -997,8 +1010,70 @@ type xaiClientToolKey struct {
 	toolType  string
 }
 
+func xaiResponseDataEvents(prepared *xaiPreparedRequest, eventData []byte) [][]byte {
+	if prepared != nil && prepared.nativeGrokCLI {
+		return [][]byte{bytes.Clone(eventData)}
+	}
+	return xaiNormalizeReasoningSummaryDataEvents(eventData)
+}
+
+func xaiResponseEventLine(prepared *xaiPreparedRequest, eventLine []byte, eventName string) []byte {
+	if prepared != nil && prepared.nativeGrokCLI {
+		return bytes.Clone(eventLine)
+	}
+	return xaiNormalizeReasoningSummaryEventLine(eventLine, eventName)
+}
+
 func (e *XAIExecutor) prepareResponsesRequest(ctx context.Context, req cliproxyexecutor.Request, opts cliproxyexecutor.Options, stream bool) (*xaiPreparedRequest, error) {
+	if xaiIsNativeGrokCLIResponsesRequest(opts) {
+		return e.prepareNativeGrokCLIResponsesRequest(ctx, req, opts, stream)
+	}
 	return e.prepareResponsesRequestTo(ctx, req, opts, stream, sdktranslator.FormatCodex)
+}
+
+func (e *XAIExecutor) prepareNativeGrokCLIResponsesRequest(ctx context.Context, req cliproxyexecutor.Request, opts cliproxyexecutor.Options, stream bool) (*xaiPreparedRequest, error) {
+	baseModel := thinking.ParseSuffix(req.Model).ModelName
+	from := opts.SourceFormat
+	responseFormat := cliproxyexecutor.ResponseFormatOrSource(opts)
+	originalPayloadSource := req.Payload
+	if len(opts.OriginalRequest) > 0 {
+		originalPayloadSource = opts.OriginalRequest
+	}
+	originalPayload := bytes.Clone(originalPayloadSource)
+	originalTranslated := sdktranslator.TranslateRequest(from, sdktranslator.FormatOpenAIResponse, baseModel, bytes.Clone(originalPayload), stream)
+	body := sdktranslator.TranslateRequest(from, sdktranslator.FormatOpenAIResponse, baseModel, bytes.Clone(req.Payload), stream)
+
+	var err error
+	body, err = thinking.ApplyThinking(body, req.Model, from.String(), e.Identifier(), e.Identifier())
+	if err != nil {
+		return nil, err
+	}
+
+	requestedModel := helps.PayloadRequestedModel(opts, req.Model)
+	requestPath := helps.PayloadRequestPath(opts)
+	body = helps.ApplyPayloadConfigWithRequest(e.cfg, baseModel, sdktranslator.FormatOpenAIResponse.String(), from.String(), "", body, originalTranslated, requestedModel, requestPath, opts.Headers)
+	body = helps.SetStringIfDifferent(body, "model", baseModel)
+	body = helps.SetBoolIfDifferent(body, "stream", stream)
+
+	sessionID, errSession := xaiResolveComposerSessionID(ctx, req, opts, baseModel)
+	if errSession != nil {
+		return nil, errSession
+	}
+	if sessionID != "" {
+		body = helps.SetStringIfDifferent(body, "prompt_cache_key", sessionID)
+	}
+
+	return &xaiPreparedRequest{
+		baseModel:            baseModel,
+		from:                 from,
+		responseFormat:       responseFormat,
+		to:                   sdktranslator.FormatCodex,
+		originalPayload:      originalPayload,
+		body:                 body,
+		sessionID:            sessionID,
+		nativeGrokCLI:        true,
+		grokCLIClientVersion: xaiGrokCLIClientVersion(opts.Headers),
+	}, nil
 }
 
 func (e *XAIExecutor) prepareResponsesRequestTo(ctx context.Context, req cliproxyexecutor.Request, opts cliproxyexecutor.Options, stream bool, to sdktranslator.Format) (*xaiPreparedRequest, error) {
@@ -1260,6 +1335,45 @@ func applyXAIChatHeaders(r *http.Request, auth *cliproxyauth.Auth, token string,
 		r.Header.Set("User-Agent", "xai-grok-workspace/"+xaiClientVersionValue)
 	}
 	applyXAICustomHeaders(r, auth)
+}
+
+func xaiIsNativeGrokCLIResponsesRequest(opts cliproxyexecutor.Options) bool {
+	if opts.SourceFormat != sdktranslator.FormatOpenAIResponse || opts.Headers == nil {
+		return false
+	}
+	userAgent := strings.ToLower(strings.TrimSpace(opts.Headers.Get("User-Agent")))
+	return strings.HasPrefix(userAgent, "grok-shell/") || strings.HasPrefix(userAgent, "xai-grok-workspace/")
+}
+
+func xaiGrokCLIClientVersion(headers http.Header) string {
+	if headers == nil {
+		return ""
+	}
+	if version := strings.TrimSpace(headers.Get(xaiClientVersionHeader)); version != "" {
+		return version
+	}
+	userAgent := strings.TrimSpace(headers.Get("User-Agent"))
+	lowerUserAgent := strings.ToLower(userAgent)
+	for _, prefix := range []string{"grok-shell/", "xai-grok-workspace/"} {
+		if !strings.HasPrefix(lowerUserAgent, prefix) {
+			continue
+		}
+		version := strings.TrimSpace(userAgent[len(prefix):])
+		if separator := strings.IndexAny(version, " (\t"); separator >= 0 {
+			version = version[:separator]
+		}
+		return strings.TrimSpace(version)
+	}
+	return ""
+}
+
+func applyXAIGrokCLIClientVersion(r *http.Request, baseURL, version string) {
+	if r == nil || !xaiIsCLIChatProxyBaseURL(baseURL) || strings.TrimSpace(version) == "" {
+		return
+	}
+	version = strings.TrimSpace(version)
+	r.Header.Set(xaiClientVersionHeader, version)
+	r.Header.Set("User-Agent", "xai-grok-workspace/"+version)
 }
 
 func xaiResolveComposerSessionID(ctx context.Context, req cliproxyexecutor.Request, opts cliproxyexecutor.Options, baseModel string) (string, error) {

@@ -151,6 +151,273 @@ func TestCountXAIInputTokensExcludesRequestStructure(t *testing.T) {
 	}
 }
 
+func TestXAIExecutorPrepareNativeGrokCLIResponsesPreservesRequest(t *testing.T) {
+	exec := NewXAIExecutor(&config.Config{})
+	payload := []byte(`{
+		"model":"grok-4.5",
+		"stream":false,
+		"store":true,
+		"parallel_tool_calls":false,
+		"previous_response_id":"resp_previous",
+		"prompt_cache_retention":"24h",
+		"safety_identifier":"employee-1",
+		"stream_options":{"include_usage":true},
+		"max_output_tokens":2048,
+		"temperature":0.2,
+		"top_p":0.9,
+		"metadata":{"source":"grok-cli"},
+		"user":"employee-1",
+		"include":["reasoning.encrypted_content","file_search_call.results"],
+		"input":[{"type":"message","role":"system","content":"preserve me"},{"type":"message","role":"user","content":"hello"}],
+		"tools":[
+			{"type":"custom","name":"apply_patch","description":"Apply a patch."},
+			{"type":"tool_search"},
+			{"type":"image_generation"}
+		]
+	}`)
+
+	prepared, err := exec.prepareResponsesRequest(context.Background(), cliproxyexecutor.Request{
+		Model:   "grok-4.5",
+		Payload: payload,
+	}, cliproxyexecutor.Options{
+		SourceFormat: sdktranslator.FormatOpenAIResponse,
+		Headers: http.Header{
+			"User-Agent": []string{"grok-shell/0.2.111 (macos; aarch64)"},
+		},
+		OriginalRequest: payload,
+	}, true)
+	if err != nil {
+		t.Fatalf("prepareResponsesRequest() error = %v", err)
+	}
+	if !prepared.nativeGrokCLI {
+		t.Fatal("nativeGrokCLI = false, want true")
+	}
+	if prepared.grokCLIClientVersion != "0.2.111" {
+		t.Fatalf("grokCLIClientVersion = %q, want 0.2.111", prepared.grokCLIClientVersion)
+	}
+	if prepared.to != sdktranslator.FormatCodex {
+		t.Fatalf("response source format = %q, want %q", prepared.to, sdktranslator.FormatCodex)
+	}
+
+	body := prepared.body
+	for _, path := range []string{
+		"store",
+		"parallel_tool_calls",
+		"previous_response_id",
+		"prompt_cache_retention",
+		"safety_identifier",
+		"stream_options.include_usage",
+		"max_output_tokens",
+		"temperature",
+		"top_p",
+		"metadata.source",
+		"user",
+	} {
+		if !gjson.GetBytes(body, path).Exists() {
+			t.Fatalf("%s missing from native Grok CLI body: %s", path, string(body))
+		}
+	}
+	if !gjson.GetBytes(body, "stream").Bool() {
+		t.Fatalf("stream = false, want true for upstream streaming: %s", string(body))
+	}
+	if gjson.GetBytes(body, "store").Bool() != true {
+		t.Fatalf("store changed: %s", string(body))
+	}
+	if gjson.GetBytes(body, "parallel_tool_calls").Bool() != false {
+		t.Fatalf("parallel_tool_calls changed: %s", string(body))
+	}
+	if got := gjson.GetBytes(body, "input.0.role").String(); got != "system" {
+		t.Fatalf("input.0.role = %q, want system; body=%s", got, string(body))
+	}
+	if gjson.GetBytes(body, "instructions").Exists() {
+		t.Fatalf("instructions was injected into native Grok CLI body: %s", string(body))
+	}
+	include := gjson.GetBytes(body, "include").Array()
+	if len(include) != 2 || include[1].String() != "file_search_call.results" {
+		t.Fatalf("include changed: %s", string(body))
+	}
+	tools := gjson.GetBytes(body, "tools").Array()
+	if len(tools) != 3 {
+		t.Fatalf("tools length = %d, want 3; body=%s", len(tools), string(body))
+	}
+	if tools[0].Get("type").String() != "custom" || tools[0].Get("name").String() != "apply_patch" {
+		t.Fatalf("apply_patch custom tool changed: %s", string(body))
+	}
+	if tools[1].Get("type").String() != "tool_search" || tools[2].Get("type").String() != "image_generation" {
+		t.Fatalf("native Grok CLI tool types changed: %s", string(body))
+	}
+	if gjson.GetBytes(body, `tools.#(type=="x_search")`).Exists() {
+		t.Fatalf("x_search was injected into native Grok CLI body: %s", string(body))
+	}
+}
+
+func TestXAIIsNativeGrokCLIResponsesRequest(t *testing.T) {
+	tests := []struct {
+		name   string
+		format sdktranslator.Format
+		ua     string
+		want   bool
+	}{
+		{name: "grok shell responses", format: sdktranslator.FormatOpenAIResponse, ua: "grok-shell/0.2.111 (macos; aarch64)", want: true},
+		{name: "workspace responses", format: sdktranslator.FormatOpenAIResponse, ua: "xai-grok-workspace/0.2.111", want: true},
+		{name: "grok shell chat", format: sdktranslator.FormatOpenAI, ua: "grok-shell/0.2.111 (macos; aarch64)", want: false},
+		{name: "ordinary responses client", format: sdktranslator.FormatOpenAIResponse, ua: "openai-python/2.0", want: false},
+		{name: "missing user agent", format: sdktranslator.FormatOpenAIResponse, want: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			headers := make(http.Header)
+			if tc.ua != "" {
+				headers.Set("User-Agent", tc.ua)
+			}
+			got := xaiIsNativeGrokCLIResponsesRequest(cliproxyexecutor.Options{
+				SourceFormat: tc.format,
+				Headers:      headers,
+			})
+			if got != tc.want {
+				t.Fatalf("xaiIsNativeGrokCLIResponsesRequest() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestApplyXAIGrokCLIClientVersionOnlyForCLIProxy(t *testing.T) {
+	cliProxyRequest, err := http.NewRequest(http.MethodPost, xaiauth.CLIChatProxyBaseURL+"/responses", nil)
+	if err != nil {
+		t.Fatalf("NewRequest() error = %v", err)
+	}
+	applyXAIGrokCLIClientVersion(cliProxyRequest, xaiauth.CLIChatProxyBaseURL, "0.2.111")
+	if got := cliProxyRequest.Header.Get(xaiClientVersionHeader); got != "0.2.111" {
+		t.Fatalf("%s = %q, want 0.2.111", xaiClientVersionHeader, got)
+	}
+	if got := cliProxyRequest.Header.Get("User-Agent"); got != "xai-grok-workspace/0.2.111" {
+		t.Fatalf("User-Agent = %q, want xai-grok-workspace/0.2.111", got)
+	}
+
+	customRequest, err := http.NewRequest(http.MethodPost, "https://gateway.example/responses", nil)
+	if err != nil {
+		t.Fatalf("NewRequest() error = %v", err)
+	}
+	applyXAIGrokCLIClientVersion(customRequest, "https://gateway.example", "0.2.111")
+	if got := customRequest.Header.Get(xaiClientVersionHeader); got != "" {
+		t.Fatalf("custom gateway %s = %q, want empty", xaiClientVersionHeader, got)
+	}
+	if got := customRequest.Header.Get("User-Agent"); got != "" {
+		t.Fatalf("custom gateway User-Agent = %q, want empty", got)
+	}
+}
+
+func TestXAIExecutorNativeGrokCLINonStreamReturnsResponseObject(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_native\",\"status\":\"completed\",\"model\":\"grok-4.5\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]}],\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n"))
+	}))
+	defer server.Close()
+
+	exec := NewXAIExecutor(&config.Config{})
+	auth := &cliproxyauth.Auth{
+		ID:       "xai-native-grok-cli-non-stream",
+		Provider: "xai",
+		Attributes: map[string]string{
+			"base_url":  server.URL,
+			"auth_kind": "oauth",
+		},
+		Metadata: map[string]any{"access_token": "xai-token"},
+	}
+	payload := []byte(`{"model":"grok-4.5","input":"hello"}`)
+	response, err := exec.Execute(context.Background(), auth, cliproxyexecutor.Request{
+		Model:   "grok-4.5",
+		Payload: payload,
+	}, cliproxyexecutor.Options{
+		SourceFormat:    sdktranslator.FormatOpenAIResponse,
+		ResponseFormat:  sdktranslator.FormatOpenAIResponse,
+		OriginalRequest: payload,
+		Headers: http.Header{
+			"User-Agent": []string{"grok-shell/0.2.111 (macos; aarch64)"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if got := gjson.GetBytes(response.Payload, "id").String(); got != "resp_native" {
+		t.Fatalf("response id = %q, want resp_native; payload=%s", got, string(response.Payload))
+	}
+	if gjson.GetBytes(response.Payload, "type").String() == "response.completed" {
+		t.Fatalf("non-stream response remained wrapped in an SSE event: %s", string(response.Payload))
+	}
+}
+
+func TestXAIExecutorNativeGrokCLIStreamPreservesResponseEvents(t *testing.T) {
+	var gotBody []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var errRead error
+		gotBody, errRead = io.ReadAll(r.Body)
+		if errRead != nil {
+			t.Fatalf("read body: %v", errRead)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("event: response.reasoning_text.delta\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"response.reasoning_text.delta\",\"delta\":\"thinking\"}\n\n"))
+		_, _ = w.Write([]byte("event: response.output_item.added\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"custom_tool_call\",\"name\":\"x_keyword_search\",\"call_id\":\"xs_call_1\"}}\n\n"))
+		_, _ = w.Write([]byte("event: response.completed\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"status\":\"completed\",\"model\":\"grok-4.5\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n"))
+	}))
+	defer server.Close()
+
+	exec := NewXAIExecutor(&config.Config{})
+	auth := &cliproxyauth.Auth{
+		ID:       "xai-native-grok-cli",
+		Provider: "xai",
+		Attributes: map[string]string{
+			"base_url":  server.URL,
+			"auth_kind": "oauth",
+		},
+		Metadata: map[string]any{
+			"access_token": "xai-token",
+		},
+	}
+	payload := []byte(`{"model":"grok-4.5","stream":true,"previous_response_id":"resp_previous","input":"hello","tools":[{"type":"x_search"}]}`)
+	result, err := exec.ExecuteStream(context.Background(), auth, cliproxyexecutor.Request{
+		Model:   "grok-4.5",
+		Payload: payload,
+	}, cliproxyexecutor.Options{
+		SourceFormat:    sdktranslator.FormatOpenAIResponse,
+		ResponseFormat:  sdktranslator.FormatOpenAIResponse,
+		OriginalRequest: payload,
+		Stream:          true,
+		Headers: http.Header{
+			"User-Agent": []string{"grok-shell/0.2.111 (macos; aarch64)"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ExecuteStream() error = %v", err)
+	}
+
+	var output bytes.Buffer
+	for chunk := range result.Chunks {
+		if chunk.Err != nil {
+			t.Fatalf("stream chunk error = %v", chunk.Err)
+		}
+		output.Write(chunk.Payload)
+		output.WriteByte('\n')
+	}
+	if got := gjson.GetBytes(gotBody, "previous_response_id").String(); got != "resp_previous" {
+		t.Fatalf("previous_response_id = %q, want resp_previous; body=%s", got, string(gotBody))
+	}
+	streamOutput := output.String()
+	if !strings.Contains(streamOutput, "response.reasoning_text.delta") {
+		t.Fatalf("native reasoning event missing: %s", streamOutput)
+	}
+	if strings.Contains(streamOutput, "response.reasoning_summary_text.delta") {
+		t.Fatalf("native reasoning event was renamed: %s", streamOutput)
+	}
+	if !strings.Contains(streamOutput, "x_keyword_search") {
+		t.Fatalf("native x_search trace was filtered: %s", streamOutput)
+	}
+}
+
 func TestXAIExecutorExecuteShapesResponsesRequest(t *testing.T) {
 	var gotPath string
 	var gotAuth string
