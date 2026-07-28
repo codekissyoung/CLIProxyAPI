@@ -1145,7 +1145,14 @@ func isUnauthorizedError(err error) bool {
 		return true
 	}
 	raw := strings.ToLower(err.Error())
-	return strings.Contains(raw, "status 401") || strings.Contains(raw, "401 unauthorized")
+	if strings.Contains(raw, "status 401") || strings.Contains(raw, "401 unauthorized") {
+		return true
+	}
+	// OAuth token endpoints answer a revoked or expired refresh token with
+	// HTTP 400 invalid_grant (RFC 6749 §5.2), not 401 — xAI does exactly this.
+	// Without this branch the credential is never marked unavailable and keeps
+	// getting picked until every request fails.
+	return strings.Contains(raw, "invalid_grant") || strings.Contains(raw, "invalid_token")
 }
 
 func hasUnauthorizedAuthFailure(auth *Auth) bool {

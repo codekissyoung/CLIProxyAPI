@@ -451,6 +451,15 @@ func (m *Manager) refreshAuthForRequest(ctx context.Context, id, failedAccessTok
 	now := time.Now()
 	if err != nil {
 		unauthorized := isUnauthorizedError(err)
+		// Refresh failures used to be debug-only, so a revoked credential was
+		// invisible in production (debug is off) until users reported errors.
+		// Warn level keeps the two cases distinguishable for alerting: the
+		// unauthorized one is terminal, the other is retried with backoff.
+		if unauthorized {
+			log.Warnf("auth refresh unauthorized, credential likely revoked: provider=%s auth_id=%s error=%v", auth.Provider, auth.ID, err)
+		} else {
+			log.Warnf("auth refresh failed, will retry: provider=%s auth_id=%s error=%v", auth.Provider, auth.ID, err)
+		}
 		shouldReschedule := false
 		m.mu.Lock()
 		if current := m.auths[id]; current != nil {
