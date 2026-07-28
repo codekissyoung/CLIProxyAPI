@@ -46,11 +46,18 @@ const (
 	xaiTokenAuthHeader          = "X-XAI-Token-Auth"
 	xaiTokenAuthValue           = "xai-grok-cli"
 	xaiClientVersionHeader      = "x-grok-client-version"
+	xaiClientIdentifierHeader   = "X-Grok-Client-Identifier"
+	// Fallback for callers that are not the Grok CLI. Requests that do carry a
+	// Grok CLI version forward their own (see applyXAIGrokCLIClientVersion).
 	// Keep in sync with the current Grok CLI client version that chat-proxy expects.
-	xaiClientVersionValue = "0.2.93"
+	xaiClientVersionValue = "0.2.112"
 	// xaiUsingAPIAttr enables the official API path for non-media HTTP chat.
 	xaiUsingAPIAttr = "using_api"
 )
+
+// xaiGrokCLIUserAgentPrefixes lists the product tokens the Grok CLI uses in its
+// User-Agent.
+var xaiGrokCLIUserAgentPrefixes = []string{"grok-shell/", "grok-pager/", "xai-grok-workspace/"}
 
 // xaiXSearchToolJSON is the native X Search tool injected when enabled by config.
 // Internal subtool traces are still filtered downstream when this tool is present.

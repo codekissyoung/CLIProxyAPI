@@ -253,15 +253,20 @@ func TestXAIExecutorPrepareNativeGrokCLIResponsesPreservesRequest(t *testing.T) 
 
 func TestXAIIsNativeGrokCLIResponsesRequest(t *testing.T) {
 	tests := []struct {
-		name   string
-		format sdktranslator.Format
-		ua     string
-		want   bool
+		name       string
+		format     sdktranslator.Format
+		ua         string
+		identifier string
+		want       bool
 	}{
 		{name: "grok shell responses", format: sdktranslator.FormatOpenAIResponse, ua: "grok-shell/0.2.111 (macos; aarch64)", want: true},
 		{name: "workspace responses", format: sdktranslator.FormatOpenAIResponse, ua: "xai-grok-workspace/0.2.111", want: true},
+		{name: "grok pager leads the user agent", format: sdktranslator.FormatOpenAIResponse, ua: "grok-pager/0.2.111 grok-shell/0.2.111 (macos; aarch64)", want: true},
+		{name: "unknown token before a known one", format: sdktranslator.FormatOpenAIResponse, ua: "grok-future/0.3.0 grok-shell/0.3.0 (linux; x86_64)", want: true},
+		{name: "unknown token with identifier header", format: sdktranslator.FormatOpenAIResponse, ua: "grok-future/0.3.0 (linux; x86_64)", identifier: "grok-future", want: true},
 		{name: "grok shell chat", format: sdktranslator.FormatOpenAI, ua: "grok-shell/0.2.111 (macos; aarch64)", want: false},
 		{name: "ordinary responses client", format: sdktranslator.FormatOpenAIResponse, ua: "openai-python/2.0", want: false},
+		{name: "grok substring is not a product token", format: sdktranslator.FormatOpenAIResponse, ua: "my-grok-shell/1.0", want: false},
 		{name: "missing user agent", format: sdktranslator.FormatOpenAIResponse, want: false},
 	}
 
@@ -271,6 +276,9 @@ func TestXAIIsNativeGrokCLIResponsesRequest(t *testing.T) {
 			if tc.ua != "" {
 				headers.Set("User-Agent", tc.ua)
 			}
+			if tc.identifier != "" {
+				headers.Set(xaiClientIdentifierHeader, tc.identifier)
+			}
 			got := xaiIsNativeGrokCLIResponsesRequest(cliproxyexecutor.Options{
 				SourceFormat: tc.format,
 				Headers:      headers,
@@ -279,6 +287,62 @@ func TestXAIIsNativeGrokCLIResponsesRequest(t *testing.T) {
 				t.Fatalf("xaiIsNativeGrokCLIResponsesRequest() = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestXAIGrokCLIClientVersion(t *testing.T) {
+	tests := []struct {
+		name   string
+		ua     string
+		header string
+		want   string
+	}{
+		{name: "version header wins", ua: "grok-pager/0.2.111 grok-shell/0.2.111 (macos; aarch64)", header: "0.2.112", want: "0.2.112"},
+		{name: "pager user agent", ua: "grok-pager/0.2.111 grok-shell/0.2.111 (macos; aarch64)", want: "0.2.111"},
+		{name: "shell user agent", ua: "grok-shell/0.2.112 (linux; x86_64)", want: "0.2.112"},
+		{name: "workspace user agent", ua: "xai-grok-workspace/0.2.93", want: "0.2.93"},
+		{name: "non grok client", ua: "codex-tui/0.145.0 (Mac OS 26.5.2; arm64)", want: ""},
+		{name: "no headers at all", want: ""},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			headers := make(http.Header)
+			if tc.ua != "" {
+				headers.Set("User-Agent", tc.ua)
+			}
+			if tc.header != "" {
+				headers.Set(xaiClientVersionHeader, tc.header)
+			}
+			if got := xaiGrokCLIClientVersion(headers); got != tc.want {
+				t.Fatalf("xaiGrokCLIClientVersion() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// A Grok CLI request that misses the native Responses path (for example a chat
+// completions source format) must still forward its own client version instead
+// of falling back to the pinned xaiClientVersionValue constant.
+func TestPrepareResponsesRequestToCarriesGrokCLIClientVersion(t *testing.T) {
+	exec := NewXAIExecutor(&config.Config{})
+	payload := []byte(`{"model":"grok-4.5","input":[{"type":"message","role":"user","content":"hi"}]}`)
+
+	prepared, err := exec.prepareResponsesRequestTo(context.Background(), cliproxyexecutor.Request{
+		Model:   "grok-4.5",
+		Payload: payload,
+	}, cliproxyexecutor.Options{
+		SourceFormat: sdktranslator.FormatOpenAIResponse,
+		Headers: http.Header{
+			"User-Agent": []string{"grok-pager/0.2.111 grok-shell/0.2.111 (macos; aarch64)"},
+		},
+		OriginalRequest: payload,
+	}, true, sdktranslator.FormatCodex)
+	if err != nil {
+		t.Fatalf("prepareResponsesRequestTo() error = %v", err)
+	}
+	if prepared.grokCLIClientVersion != "0.2.111" {
+		t.Fatalf("grokCLIClientVersion = %q, want 0.2.111", prepared.grokCLIClientVersion)
 	}
 }
 

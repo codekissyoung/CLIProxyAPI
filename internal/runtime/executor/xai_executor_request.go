@@ -199,6 +199,11 @@ func (e *XAIExecutor) prepareResponsesRequestTo(ctx context.Context, req cliprox
 		sessionID:             sessionID,
 		replayScope:           replayScope,
 		filterInternalXSearch: xaiRequestHasNativeXSearch(body),
+		// Non-native callers report "" here and keep the xaiClientVersionValue
+		// fallback. A Grok CLI request that lands on this path anyway (source
+		// format other than Responses) still forwards its own version instead
+		// of being pinned to the constant.
+		grokCLIClientVersion: xaiGrokCLIClientVersion(opts.Headers),
 	}, nil
 }
 
@@ -391,8 +396,30 @@ func xaiIsNativeGrokCLIResponsesRequest(opts cliproxyexecutor.Options) bool {
 	if opts.SourceFormat != sdktranslator.FormatOpenAIResponse || opts.Headers == nil {
 		return false
 	}
-	userAgent := strings.ToLower(strings.TrimSpace(opts.Headers.Get("User-Agent")))
-	return strings.HasPrefix(userAgent, "grok-shell/") || strings.HasPrefix(userAgent, "xai-grok-workspace/")
+	if xaiGrokCLIUserAgentToken(opts.Headers.Get("User-Agent")) != "" {
+		return true
+	}
+	// Newer CLI builds may introduce product tokens we do not know yet. The
+	// client identifier header is only ever set by the Grok CLI itself, so it
+	// keeps native passthrough working across renames.
+	return strings.TrimSpace(opts.Headers.Get(xaiClientIdentifierHeader)) != ""
+}
+
+// xaiGrokCLIUserAgentToken returns the Grok CLI product token found in userAgent
+// (e.g. "grok-shell/0.2.111"), or "" when userAgent is not a Grok CLI one.
+// Real requests carry several tokens and the leading one depends on which CLI
+// component issued the request ("grok-pager/0.2.111 grok-shell/0.2.111 (macos;
+// aarch64)"), so every token is checked rather than only the first.
+func xaiGrokCLIUserAgentToken(userAgent string) string {
+	for _, field := range strings.Fields(userAgent) {
+		lower := strings.ToLower(field)
+		for _, prefix := range xaiGrokCLIUserAgentPrefixes {
+			if strings.HasPrefix(lower, prefix) {
+				return field
+			}
+		}
+	}
+	return ""
 }
 
 func xaiGrokCLIClientVersion(headers http.Header) string {
@@ -402,19 +429,15 @@ func xaiGrokCLIClientVersion(headers http.Header) string {
 	if version := strings.TrimSpace(headers.Get(xaiClientVersionHeader)); version != "" {
 		return version
 	}
-	userAgent := strings.TrimSpace(headers.Get("User-Agent"))
-	lowerUserAgent := strings.ToLower(userAgent)
-	for _, prefix := range []string{"grok-shell/", "xai-grok-workspace/"} {
-		if !strings.HasPrefix(lowerUserAgent, prefix) {
-			continue
-		}
-		version := strings.TrimSpace(userAgent[len(prefix):])
-		if separator := strings.IndexAny(version, " (\t"); separator >= 0 {
-			version = version[:separator]
-		}
-		return strings.TrimSpace(version)
+	token := xaiGrokCLIUserAgentToken(headers.Get("User-Agent"))
+	if token == "" {
+		return ""
 	}
-	return ""
+	_, version, _ := strings.Cut(token, "/")
+	if separator := strings.IndexAny(version, " (\t"); separator >= 0 {
+		version = version[:separator]
+	}
+	return strings.TrimSpace(version)
 }
 
 func applyXAIGrokCLIClientVersion(r *http.Request, baseURL, version string) {
