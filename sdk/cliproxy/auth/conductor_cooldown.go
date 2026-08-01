@@ -1530,10 +1530,11 @@ func isMissingModelPhrase(value string) bool {
 
 // isRequestInvalidError returns true if the error represents a client request
 // error that should not be retried. Specifically, it treats 400 responses with
-// "invalid_request_error", request-scoped 404 item misses caused by `store=false`,
-// and all 422 responses as request-shape failures, where switching auths or
-// pooled upstream models will not help. Model-support errors are excluded so
-// routing can fall through to another auth or upstream.
+// "invalid_request_error", deterministic parameter rejections ("Unsupported
+// parameter" / "Unknown parameter"), request-scoped 404 item misses caused by
+// `store=false`, and all 422 responses as request-shape failures, where
+// switching auths or pooled upstream models will not help. Model-support
+// errors are excluded so routing can fall through to another auth or upstream.
 func isRequestInvalidError(err error) bool {
 	if err == nil {
 		return false
@@ -1554,10 +1555,13 @@ func isRequestInvalidError(err error) bool {
 	switch status {
 	case http.StatusBadRequest:
 		msg := err.Error()
+		lowerMsg := strings.ToLower(msg)
 		return strings.Contains(msg, "invalid_request_error") ||
 			strings.Contains(msg, "bad_request_error") ||
 			strings.Contains(msg, "INVALID_ARGUMENT") ||
-			strings.Contains(msg, "FAILED_PRECONDITION")
+			strings.Contains(msg, "FAILED_PRECONDITION") ||
+			strings.Contains(lowerMsg, "unsupported parameter") ||
+			strings.Contains(lowerMsg, "unknown parameter")
 	case http.StatusNotFound:
 		return isRequestScopedNotFoundMessage(err.Error())
 	case http.StatusUnprocessableEntity:

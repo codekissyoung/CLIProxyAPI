@@ -2,6 +2,7 @@ package responses
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 
 	translatorcommon "github.com/router-for-me/CLIProxyAPI/v7/internal/translator/common"
@@ -47,6 +48,7 @@ func SanitizeCodexResponsesRequest(rawJSON []byte) []byte {
 		"max_output_tokens", "max_completion_tokens",
 		"temperature", "top_p", "presence_penalty", "frequency_penalty",
 		"truncation", "context_management", "metadata", "user",
+		"reasoning_effort",
 	} {
 		if gjson.GetBytes(rawJSON, path).Exists() {
 			dropped = append(dropped, path)
@@ -82,6 +84,18 @@ func SanitizeCodexResponsesRequest(rawJSON []byte) []byte {
 
 	// Delete the user field as it is not supported by the Codex upstream.
 	rawJSON = deleteCodexRequestFields(rawJSON, "user")
+
+	// Codex Responses rejects the chat-style reasoning_effort field (reasoning
+	// effort belongs in the reasoning object).
+	rawJSON = deleteCodexRequestFields(rawJSON, "reasoning_effort")
+
+	// Codex Responses rejects a status field on input items (clients echoing
+	// back output items often carry it), so strip it from every input element.
+	var strippedInputStatus bool
+	rawJSON, strippedInputStatus = stripCodexInputItemStatus(rawJSON)
+	if strippedInputStatus {
+		dropped = append(dropped, "input[].status")
+	}
 
 	if len(dropped) > 0 || responseFormat != "" {
 		fields := log.Fields{}
@@ -136,6 +150,29 @@ func deleteCodexRequestFields(rawJSON []byte, paths ...string) []byte {
 		}
 	}
 	return rawJSON
+}
+
+// stripCodexInputItemStatus removes the status field from every element of the
+// input array. The Codex upstream answers {"detail":"Unknown parameter:
+// 'input[N].status'"} when clients echo back output items that carry a status.
+// Deleting object keys never reindexes the array, so original indices stay valid.
+func stripCodexInputItemStatus(rawJSON []byte) (out []byte, stripped bool) {
+	out = rawJSON
+	input := gjson.GetBytes(out, "input")
+	if !input.IsArray() {
+		return out, false
+	}
+	for i := range input.Array() {
+		path := "input." + strconv.Itoa(i) + ".status"
+		if !gjson.GetBytes(out, path).Exists() {
+			continue
+		}
+		if updated, errDelete := sjson.DeleteBytes(out, path); errDelete == nil {
+			out = updated
+			stripped = true
+		}
+	}
+	return out, stripped
 }
 
 // applyResponsesCompactionCompatibility handles OpenAI Responses context_management.compaction
