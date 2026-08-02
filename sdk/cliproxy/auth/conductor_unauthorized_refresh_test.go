@@ -6,9 +6,31 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
 )
+
+func invalidationCounterValue(t *testing.T, authID string) float64 {
+	t.Helper()
+	mfs, err := prometheus.DefaultGatherer.Gather()
+	if err != nil {
+		t.Fatalf("gather metrics: %v", err)
+	}
+	for _, mf := range mfs {
+		if mf.GetName() != "cliproxy_account_invalidations_total" {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			for _, l := range m.GetLabel() {
+				if l.GetName() == "auth_id" && l.GetValue() == authID {
+					return m.GetCounter().GetValue()
+				}
+			}
+		}
+	}
+	return 0
+}
 
 type unauthorizedRefreshExecutor struct {
 	id string
@@ -255,6 +277,28 @@ func TestManager_Execute_UnauthorizedRefreshFailureFallsBackToNextAuth(t *testin
 	}
 	if state.StatusMessage != "unauthorized" && (state.LastError == nil || state.LastError.StatusCode() != http.StatusUnauthorized) {
 		t.Fatalf("expected unauthorized suspension, got state=%+v", state)
+	}
+}
+
+// A revoked credential is typically refreshed (and rejected) several times
+// before the pool stops scheduling it. The invalidation counter must record
+// the ban exactly once — on the transition into the revoked state — so the
+// metrics store can serve as a durable per-account ban registry.
+func TestManager_RefreshAuthForRequest_RevocationCountedOnce(t *testing.T) {
+	m, executor, primary, _, _ := newUnauthorizedRefreshFixture(t, true)
+
+	before := invalidationCounterValue(t, primary.ID)
+	for i := 0; i < 2; i++ {
+		if _, err := m.refreshAuthForRequest(context.Background(), primary.ID, "stale-access-token"); err == nil {
+			t.Fatalf("refreshAuthForRequest %d error = nil, want unauthorized refresh failure", i)
+		}
+	}
+	if got := executor.RefreshCalls(); got != 2 {
+		t.Fatalf("Refresh calls = %d, want 2", got)
+	}
+	after := invalidationCounterValue(t, primary.ID)
+	if delta := after - before; delta != 1 {
+		t.Fatalf("invalidations delta = %v, want exactly 1 across repeated revoked refreshes", delta)
 	}
 }
 

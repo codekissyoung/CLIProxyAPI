@@ -11,6 +11,7 @@ import (
 	"time"
 
 	internalconfig "github.com/router-for-me/CLIProxyAPI/v7/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/metrics"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
 	log "github.com/sirupsen/logrus"
 )
@@ -466,6 +467,12 @@ func (m *Manager) refreshAuthForRequest(ctx context.Context, id, failedAccessTok
 			current.LastError = refreshErrorFromError(err)
 			if unauthorized {
 				current.NextRefreshAfter = time.Time{}
+				if !current.Unavailable || current.Status != StatusError {
+					// First detection of this revocation only: repeated
+					// unauthorized refreshes of an already-dead credential
+					// must not inflate the ban counter.
+					metrics.RecordAccountInvalidation(current.ID)
+				}
 				current.Unavailable = true
 				current.Status = StatusError
 				current.StatusMessage = "unauthorized"

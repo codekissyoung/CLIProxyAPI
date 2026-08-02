@@ -49,6 +49,19 @@ var (
 		Name: "cliproxy_account_failures_total",
 		Help: "Cumulative number of upstream provider errors for this account, labeled by http_status.",
 	}, []string{"auth_id", "http_status"})
+
+	// AccountInvalidationsTotal counts credential revocations detected on the
+	// refresh path (conductor marks the auth unavailable after an unauthorized
+	// refresh). Request-path 401s are already visible in AccountFailuresTotal,
+	// but a revocation discovered only via token refresh leaves no request-path
+	// trace at all — this counter is what makes such events durable in the
+	// metrics store (the 2026-07-19/20 alice revocation was invisible without
+	// it). Incremented once per revocation transition, not per failed refresh
+	// attempt.
+	AccountInvalidationsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "cliproxy_account_invalidations_total",
+		Help: "Cumulative number of times this account's credential was detected revoked on the refresh path.",
+	}, []string{"auth_id"})
 )
 
 // RecordAccountPick increments the per-account request counter. No-op if
@@ -78,4 +91,14 @@ func RecordUpstreamFailure(authID string, httpStatus int) {
 		return
 	}
 	AccountFailuresTotal.WithLabelValues(authID, strconv.Itoa(httpStatus)).Inc()
+}
+
+// RecordAccountInvalidation increments the per-account revocation counter.
+// Callers must invoke it only on the transition into the revoked/unavailable
+// state, never per failed refresh attempt, so one ban counts exactly once.
+func RecordAccountInvalidation(authID string) {
+	if authID == "" {
+		return
+	}
+	AccountInvalidationsTotal.WithLabelValues(authID).Inc()
 }
