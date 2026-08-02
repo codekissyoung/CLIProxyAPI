@@ -87,12 +87,13 @@ func applyCodexWebsocketHeaders(ctx context.Context, headers http.Header, auth *
 	misc.EnsureHeader(headers, ginHeaders, "x-responsesapi-include-timing-metrics", "")
 	misc.EnsureHeader(headers, ginHeaders, "Version", "")
 	fallbackUserAgent := codexFallbackUserAgent(auth)
+	cloakingDisabled := cfg != nil && cfg.Codex.DisableCodexCloaking
 	uaForced := false
 	if isAPIKey {
 		ensureHeaderWithPriority(headers, ginHeaders, "User-Agent", "", fallbackUserAgent)
 	} else {
 		ensureHeaderWithConfigPrecedence(headers, ginHeaders, "User-Agent", cfgUserAgent, fallbackUserAgent)
-		if cfgUserAgent == "" && !strings.Contains(headers.Get("User-Agent"), "Mac OS") {
+		if !cloakingDisabled && cfgUserAgent == "" && !strings.Contains(headers.Get("User-Agent"), "Mac OS") {
 			headers.Set("User-Agent", fallbackUserAgent)
 			uaForced = true
 		}
@@ -125,7 +126,9 @@ func applyCodexWebsocketHeaders(ctx context.Context, headers http.Header, auth *
 	case clientOriginator != "":
 		headers.Set("Originator", clientOriginator)
 	default:
-		headers.Set("Originator", codexOriginator)
+		if !cloakingDisabled {
+			headers.Set("Originator", codexOriginator)
+		}
 	}
 	if !isAPIKey {
 		if auth != nil && auth.Metadata != nil {

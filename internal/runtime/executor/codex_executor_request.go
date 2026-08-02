@@ -499,8 +499,9 @@ func applyCodexHeadersFromSources(r *http.Request, auth *cliproxyauth.Auth, toke
 	fallbackUserAgent := codexFallbackUserAgent(auth)
 	ensureHeaderWithConfigPrecedence(r.Header, ginHeaders, "User-Agent", cfgUserAgent, fallbackUserAgent)
 
+	cloakingDisabled := cfg != nil && cfg.Codex.DisableCodexCloaking
 	uaForced := false
-	if !isAPIKey && cfgUserAgent == "" && !strings.Contains(r.Header.Get("User-Agent"), "Mac OS") {
+	if !cloakingDisabled && !isAPIKey && cfgUserAgent == "" && !strings.Contains(r.Header.Get("User-Agent"), "Mac OS") {
 		r.Header.Set("User-Agent", fallbackUserAgent)
 		uaForced = true
 	}
@@ -530,7 +531,9 @@ func applyCodexHeadersFromSources(r *http.Request, auth *cliproxyauth.Auth, toke
 	case clientOriginator != "":
 		r.Header.Set("Originator", clientOriginator)
 	default:
-		r.Header.Set("Originator", codexOriginator)
+		if !cloakingDisabled {
+			r.Header.Set("Originator", codexOriginator)
+		}
 	}
 	if !isAPIKey {
 		if auth != nil && auth.Metadata != nil {
