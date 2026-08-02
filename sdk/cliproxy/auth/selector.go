@@ -532,8 +532,10 @@ func availabilityBlock(unavailable, quotaExceeded bool, nextRetryAfter, nextReco
 // It extracts session ID from multiple sources and maintains session-to-auth
 // mappings with automatic failover when the bound auth becomes unavailable.
 type SessionAffinitySelector struct {
-	fallback Selector
-	cache    *SessionCache
+	fallback      Selector
+	cache         *SessionCache
+	fallbackCache *SessionCache
+	sessionLocks  [256]sync.Mutex
 }
 
 // SessionAffinityConfig configures the session affinity selector.
@@ -546,7 +548,7 @@ type SessionAffinityConfig struct {
 func NewSessionAffinitySelector(fallback Selector) *SessionAffinitySelector {
 	return NewSessionAffinitySelectorWithConfig(SessionAffinityConfig{
 		Fallback: fallback,
-		TTL:      time.Hour,
+		TTL:      24 * time.Hour,
 	})
 }
 
@@ -556,21 +558,24 @@ func NewSessionAffinitySelectorWithConfig(cfg SessionAffinityConfig) *SessionAff
 		cfg.Fallback = &RoundRobinSelector{}
 	}
 	if cfg.TTL <= 0 {
-		cfg.TTL = time.Hour
+		cfg.TTL = 24 * time.Hour
 	}
-	return &SessionAffinitySelector{
-		fallback: cfg.Fallback,
-		cache:    NewSessionCache(cfg.TTL),
+	selector := &SessionAffinitySelector{
+		fallback:      cfg.Fallback,
+		cache:         NewSessionCache(cfg.TTL),
+		fallbackCache: NewSessionCache(cfg.TTL),
 	}
+	selector.cache.SetBindingCountObserver(metrics.SetAccountActiveSessions)
+	return selector
 }
 
 // Pick selects an auth with session affinity when possible.
 // Explicit Claude Code, Codex, OpenCode, pi, and request-body session signals
 // precede execution metadata, stable derived identity, and the legacy hash fallback.
 //
-// Note: The cache key includes provider, session ID, and model to handle cases where
-// a session uses multiple models (e.g., gemini-2.5-pro and gemini-3-flash-preview)
-// that may be supported by different auth credentials, and to avoid cross-provider conflicts.
+// The home cache is provider/session scoped so compatible model changes remain
+// on one account. A separate provider/session/model cache holds temporary routes
+// when the home account is unavailable or incompatible with the requested model.
 func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, auths []*Auth) (auth *Auth, err error) {
 	// Cumulative per-account request counter: covers every return path below
 	// (no-session fallback, cache hit, reselect-on-unavailable, fallback cache
@@ -607,56 +612,100 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 		return nil, err
 	}
 
-	cacheKey := provider + "::" + primaryID + "::" + model
-	fallbackKey := ""
+	homeKey := provider + "::" + primaryID
+	homeAliasKey := ""
 	if fallbackID != "" && fallbackID != primaryID {
-		fallbackKey = provider + "::" + fallbackID + "::" + model
+		homeAliasKey = provider + "::" + fallbackID
 	}
-	bind := func(authID string) {
-		if fallbackKey != "" {
-			s.cache.SetAliases(authID, cacheKey, fallbackKey)
+	modelKey := homeKey + "::" + model
+	modelAliasKey := ""
+	if homeAliasKey != "" {
+		modelAliasKey = homeAliasKey + "::" + model
+	}
+	lockHash := fnv.New32a()
+	_, _ = lockHash.Write([]byte(homeKey))
+	sessionLock := &s.sessionLocks[lockHash.Sum32()%uint32(len(s.sessionLocks))]
+	sessionLock.Lock()
+	defer sessionLock.Unlock()
+	bindHome := func(authID string) {
+		if homeAliasKey != "" {
+			s.cache.SetAliases(authID, homeKey, homeAliasKey)
 			return
 		}
-		s.cache.Set(cacheKey, authID)
+		s.cache.Set(homeKey, authID)
 	}
-
-	if cachedAuthID, ok := s.cache.GetAndRefresh(cacheKey); ok {
-		for _, auth := range available {
-			if auth.ID == cachedAuthID {
-				bind(auth.ID)
-				entry.Infof("session-affinity: cache hit | session=%s auth=%s provider=%s model=%s", primaryID, auth.ID, provider, model)
-				return auth, nil
+	bindFallback := func(authID string) {
+		if modelAliasKey != "" {
+			s.fallbackCache.SetAliases(authID, modelKey, modelAliasKey)
+			return
+		}
+		s.fallbackCache.Set(modelKey, authID)
+	}
+	findAvailable := func(authID string) *Auth {
+		for _, candidate := range available {
+			if candidate.ID == authID {
+				return candidate
 			}
 		}
-		// Cached auth not available, reselect via fallback selector for even distribution
-		auth, err := s.fallback.Pick(ctx, provider, model, opts, auths)
+		return nil
+	}
+
+	homeAuthID, homeFound := s.cache.GetAndRefresh(homeKey)
+	if !homeFound && homeAliasKey != "" {
+		homeAuthID, homeFound = s.cache.GetAndRefresh(homeAliasKey)
+	}
+	if homeFound {
+		bindHome(homeAuthID)
+		if homeAuth := findAvailable(homeAuthID); homeAuth != nil {
+			fallbackAuthID, fallbackFound := s.fallbackCache.Get(modelKey)
+			fallbackGroupKey := modelKey
+			if !fallbackFound && modelAliasKey != "" {
+				fallbackAuthID, fallbackFound = s.fallbackCache.Get(modelAliasKey)
+				fallbackGroupKey = modelAliasKey
+			}
+			if fallbackFound {
+				s.fallbackCache.InvalidateGroup(fallbackGroupKey)
+				if fallbackAuthID != homeAuthID {
+					metrics.RecordSessionRebind(fallbackAuthID, "home_recovered")
+				}
+			}
+			entry.Infof("session-affinity: home cache hit | session=%s auth=%s provider=%s model=%s", primaryID, homeAuth.ID, provider, model)
+			return homeAuth, nil
+		}
+
+		fallbackAuthID, fallbackFound := s.fallbackCache.GetAndRefresh(modelKey)
+		if !fallbackFound && modelAliasKey != "" {
+			fallbackAuthID, fallbackFound = s.fallbackCache.GetAndRefresh(modelAliasKey)
+		}
+		if fallbackFound {
+			if fallbackAuth := findAvailable(fallbackAuthID); fallbackAuth != nil {
+				bindFallback(fallbackAuthID)
+				entry.Infof("session-affinity: temporary fallback cache hit | session=%s home_auth=%s auth=%s provider=%s model=%s", primaryID, homeAuthID, fallbackAuth.ID, provider, model)
+				return fallbackAuth, nil
+			}
+		}
+
+		auth, err = s.fallback.Pick(ctx, provider, model, opts, auths)
 		if err != nil {
 			return nil, err
 		}
-		bind(auth.ID)
-		entry.Infof("session-affinity: cache hit but auth unavailable, reselected | session=%s auth=%s provider=%s model=%s", primaryID, auth.ID, provider, model)
-		return auth, nil
-	}
-
-	if fallbackKey != "" {
-		if cachedAuthID, ok := s.cache.Get(fallbackKey); ok {
-			for _, auth := range available {
-				if auth.ID == cachedAuthID {
-					bind(auth.ID)
-					entry.Infof("session-affinity: fallback cache hit | session=%s fallback=%s auth=%s provider=%s model=%s", primaryID, fallbackID, auth.ID, provider, model)
-					return auth, nil
-				}
-			}
+		bindFallback(auth.ID)
+		reason := "home_unavailable"
+		if fallbackFound {
+			reason = "fallback_unavailable"
 		}
+		metrics.RecordSessionRebind(auth.ID, reason)
+		entry.Infof("session-affinity: home unavailable, selected temporary fallback | session=%s home_auth=%s auth=%s reason=%s provider=%s model=%s", primaryID, homeAuthID, auth.ID, reason, provider, model)
+		return auth, nil
 	}
 
 	auth, err = s.fallback.Pick(ctx, provider, model, opts, auths)
 	if err != nil {
 		return nil, err
 	}
-	bind(auth.ID)
+	bindHome(auth.ID)
 	metrics.RecordNewSession(auth.ID)
-	entry.Infof("session-affinity: cache miss, new binding | session=%s auth=%s provider=%s model=%s", primaryID, auth.ID, provider, model)
+	entry.Infof("session-affinity: cache miss, new home binding | session=%s auth=%s provider=%s model=%s", primaryID, auth.ID, provider, model)
 	return auth, nil
 }
 
@@ -675,13 +724,19 @@ func (s *SessionAffinitySelector) Stop() {
 	if s.cache != nil {
 		s.cache.Stop()
 	}
+	if s.fallbackCache != nil {
+		s.fallbackCache.Stop()
+	}
 }
 
 // InvalidateAuth removes all session bindings for a specific auth.
-// Called when an auth becomes rate-limited or unavailable.
+// Called when an auth is permanently disabled or removed.
 func (s *SessionAffinitySelector) InvalidateAuth(authID string) {
 	if s.cache != nil {
 		s.cache.InvalidateAuth(authID)
+	}
+	if s.fallbackCache != nil {
+		s.fallbackCache.InvalidateAuth(authID)
 	}
 }
 

@@ -1,7 +1,7 @@
-// Package metrics exposes account-level cumulative counters for the auth pool
+// Package metrics exposes account-level counters and gauges for the auth pool
 // (Codex/Claude/... OAuth token files under the auths dir). These exist so an
 // operator can answer "how many times has this specific account been used,
-// how many distinct sessions has it ever served, how often has it failed"
+// how many logical session homes does it retain, how often has it failed"
 // without reconstructing the answer from rotated text logs by hand — see the
 // 2026-07-15 charlie@twobird.site ban investigation in the downstream
 // claude-relay-server repo for the motivating incident.
@@ -33,15 +33,29 @@ var (
 		Help: "Cumulative number of times this account was selected to serve a request.",
 	}, []string{"auth_id"})
 
-	// AccountSessionsTotal counts distinct new session-affinity bindings ever
-	// created for this account (i.e. the "cache miss, new binding" event in
-	// selector.go). This is the cumulative session count operators care about
-	// when judging whether an account is being shared across an unusually
-	// large number of concurrent end users.
+	// AccountSessionsTotal counts new logical home-binding events. A binding
+	// recreated after process restart or idle expiry is counted again, so this
+	// counter is not an exact all-time distinct-session cardinality.
 	AccountSessionsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "cliproxy_account_sessions_total",
-		Help: "Cumulative number of distinct new session bindings created for this account.",
+		Help: "Cumulative number of new logical session home bindings created for this account.",
 	}, []string{"auth_id"})
+
+	// AccountActiveSessions reports current logical session home bindings. Unlike
+	// AccountSessionsTotal this gauge decreases when bindings expire, move, or
+	// are invalidated, and aliases for one logical session count only once.
+	AccountActiveSessions = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "cliproxy_account_active_sessions",
+		Help: "Current number of logical session home bindings retained for this account.",
+	}, []string{"auth_id"})
+
+	// AccountSessionRebindsTotal counts routing changes away from or back to a
+	// session's home auth without treating the temporary route as a new logical
+	// session. The reason label is intentionally bounded by the selector.
+	AccountSessionRebindsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "cliproxy_account_session_rebinds_total",
+		Help: "Cumulative number of session routing changes involving this account, by bounded reason.",
+	}, []string{"auth_id", "reason"})
 
 	// AccountFailuresTotal counts upstream provider errors attributed to a
 	// specific account, labeled by the HTTP status the upstream returned.
@@ -73,13 +87,38 @@ func RecordAccountPick(authID string) {
 	AccountRequestsTotal.WithLabelValues(authID).Inc()
 }
 
-// RecordNewSession increments the per-account cumulative distinct-session
-// counter. Call exactly once per genuinely new session-affinity binding.
+// RecordNewSession increments the per-account cumulative home-binding event
+// counter. Call exactly once when a logical session has no retained home.
 func RecordNewSession(authID string) {
 	if authID == "" {
 		return
 	}
 	AccountSessionsTotal.WithLabelValues(authID).Inc()
+}
+
+// SetAccountActiveSessions publishes the current logical home-binding count
+// for an account. The session cache calls this on create, expiry, invalidation,
+// and shutdown so stale values do not survive selector replacement.
+func SetAccountActiveSessions(authID string, count int) {
+	if authID == "" {
+		return
+	}
+	if count < 0 {
+		count = 0
+	}
+	if count == 0 {
+		AccountActiveSessions.DeleteLabelValues(authID)
+		return
+	}
+	AccountActiveSessions.WithLabelValues(authID).Set(float64(count))
+}
+
+// RecordSessionRebind records a bounded session-routing transition.
+func RecordSessionRebind(authID, reason string) {
+	if authID == "" || reason == "" {
+		return
+	}
+	AccountSessionRebindsTotal.WithLabelValues(authID, reason).Inc()
 }
 
 // RecordUpstreamFailure increments the per-account failure counter for the

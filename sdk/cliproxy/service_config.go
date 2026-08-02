@@ -33,7 +33,7 @@ type routingRuntimeState struct {
 func normalizedRoutingRuntimeState(cfg *config.Config) routingRuntimeState {
 	state := routingRuntimeState{
 		strategy:           "round-robin",
-		sessionAffinityTTL: time.Hour,
+		sessionAffinityTTL: 24 * time.Hour,
 	}
 	if cfg == nil {
 		return state

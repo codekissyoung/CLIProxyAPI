@@ -216,10 +216,12 @@ routing:
   # Explicit Claude Code, Codex, OpenCode, and pi session headers are preferred,
   # followed by prompt_cache_key, Responses conversation IDs, legacy body IDs,
   # execution or derived session identity, and the existing first-message hash fallback.
-  # Automatic failover is always enabled when bound auth becomes unavailable.
+  # Compatible model changes retain one cross-model home auth. If that auth is
+  # unavailable or model-incompatible, a per-model temporary fallback is used
+  # without replacing the home binding; traffic returns home after recovery.
   session-affinity: false # default: false
-  # How long session-to-auth bindings are retained. Default: 1h
-  session-affinity-ttl: "1h"
+  # How long session-to-auth bindings are retained. Default: 24h
+  session-affinity-ttl: "24h"
 
 # Codex provider behavior.
 codex:

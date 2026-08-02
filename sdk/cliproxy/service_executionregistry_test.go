@@ -2836,6 +2836,13 @@ func TestBuilderPreservesInitialSelectorForSameRouting(t *testing.T) {
 	}
 }
 
+func TestNormalizedRoutingRuntimeStateDefaultsAffinityTTLTo24Hours(t *testing.T) {
+	state := normalizedRoutingRuntimeState(&config.Config{})
+	if state.sessionAffinityTTL != 24*time.Hour {
+		t.Fatalf("default session affinity TTL = %s, want 24h", state.sessionAffinityTTL)
+	}
+}
+
 func TestServiceApplyConfigRuntimePreservesSelectorForUnchangedRouting(t *testing.T) {
 	manager := coreauth.NewManager(nil, &coreauth.RoundRobinSelector{}, nil)
 	service := &Service{cfg: &config.Config{}, coreManager: manager}

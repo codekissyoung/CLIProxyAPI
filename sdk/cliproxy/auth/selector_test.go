@@ -742,7 +742,7 @@ func TestSessionAffinitySelector_SameSessionSameAuth(t *testing.T) {
 	}
 }
 
-func TestSessionAffinitySelector_WeightedBindingRebindsAfterWeightBecomesZero(t *testing.T) {
+func TestSessionAffinitySelector_WeightedBindingReturnsHomeAfterWeightRecovers(t *testing.T) {
 	t.Parallel()
 
 	selector := NewSessionAffinitySelector(&WeightedRoundRobinSelector{})
@@ -775,8 +775,8 @@ func TestSessionAffinitySelector_WeightedBindingRebindsAfterWeightBecomesZero(t 
 	if errThird != nil {
 		t.Fatalf("Pick() after rebind error = %v", errThird)
 	}
-	if third.ID != authB.ID {
-		t.Fatalf("Pick() after rebind auth.ID = %q, want sticky auth %q", third.ID, authB.ID)
+	if third.ID != authA.ID {
+		t.Fatalf("Pick() after home recovery auth.ID = %q, want home auth %q", third.ID, authA.ID)
 	}
 }
 
@@ -1464,7 +1464,7 @@ func TestSessionAffinitySelectorPrimaryTrafficKeepsConversationAliasAlive(t *tes
 	if err != nil {
 		t.Fatalf("combined Pick() error = %v", err)
 	}
-	conversationKey := provider + "::conv:conversation-session::" + model
+	conversationKey := provider + "::conv:conversation-session"
 	selector.cache.mu.Lock()
 	conversationEntry := selector.cache.entries[conversationKey]
 	conversationEntry.expiresAt = time.Now().Add(-time.Second)
@@ -1602,6 +1602,33 @@ func TestSessionCacheRotatingPrimaryEvictsObsoleteAliases(t *testing.T) {
 	}
 }
 
+func TestSessionCacheCountsLogicalAliasGroups(t *testing.T) {
+	cache := NewSessionCache(time.Minute)
+	defer cache.Stop()
+
+	observed := make(map[string]int)
+	cache.SetBindingCountObserver(func(authID string, count int) {
+		observed[authID] = count
+	})
+	cache.SetAliases("auth-a", "provider::primary-a", "provider::alias-a")
+	cache.Set("provider::primary-b", "auth-a")
+	if got := cache.BindingCount("auth-a"); got != 2 {
+		t.Fatalf("BindingCount(auth-a) = %d, want 2 logical groups", got)
+	}
+	if got := observed["auth-a"]; got != 2 {
+		t.Fatalf("observed auth-a count = %d, want 2", got)
+	}
+
+	cache.InvalidateGroup("provider::alias-a")
+	if got := cache.BindingCount("auth-a"); got != 1 {
+		t.Fatalf("BindingCount(auth-a) after alias-group invalidation = %d, want 1", got)
+	}
+	cache.InvalidateAuth("auth-a")
+	if got := observed["auth-a"]; got != 0 {
+		t.Fatalf("observed auth-a count after invalidation = %d, want 0", got)
+	}
+}
+
 func TestSessionAffinitySelector_MultiModelSession(t *testing.T) {
 	t.Parallel()
 
@@ -1640,7 +1667,7 @@ func TestSessionAffinitySelector_MultiModelSession(t *testing.T) {
 		t.Fatalf("Pick() for model-b = %q, want auth-b", pickedB.ID)
 	}
 
-	// Switch back to model-a - should still get auth-a (separate binding per model)
+	// Switch back to model-a - the home binding should still be auth-a.
 	pickedA2, err := selector.Pick(context.Background(), "provider", "model-a", opts, authsForModelA)
 	if err != nil {
 		t.Fatalf("Pick() for model-a (2nd) error = %v", err)
@@ -1658,6 +1685,115 @@ func TestSessionAffinitySelector_MultiModelSession(t *testing.T) {
 		}
 		if gotB.ID != "auth-b" {
 			t.Fatalf("Pick() #%d for model-b = %q, want auth-b", i, gotB.ID)
+		}
+	}
+}
+
+func TestSessionAffinitySelector_CompatibleModelsShareHomeAuth(t *testing.T) {
+	t.Parallel()
+
+	selector := NewSessionAffinitySelectorWithConfig(SessionAffinityConfig{
+		Fallback: &RoundRobinSelector{},
+		TTL:      time.Minute,
+	})
+	defer selector.Stop()
+	auths := []*Auth{{ID: "auth-a"}, {ID: "auth-b"}}
+	opts := cliproxyexecutor.Options{OriginalRequest: []byte(`{"session_id":"compatible-multi-model-session"}`)}
+
+	first, err := selector.Pick(context.Background(), "provider", "model-a", opts, auths)
+	if err != nil {
+		t.Fatalf("Pick(model-a) error = %v", err)
+	}
+	second, err := selector.Pick(context.Background(), "provider", "model-b", opts, auths)
+	if err != nil {
+		t.Fatalf("Pick(model-b) error = %v", err)
+	}
+	if second.ID != first.ID {
+		t.Fatalf("compatible model change moved session from %q to %q", first.ID, second.ID)
+	}
+	if got := selector.cache.BindingCount(first.ID); got != 1 {
+		t.Fatalf("home binding count = %d, want one cross-model logical session", got)
+	}
+}
+
+func TestSessionAffinitySelector_TemporaryFallbackDoesNotReplaceHome(t *testing.T) {
+	t.Parallel()
+
+	selector := NewSessionAffinitySelectorWithConfig(SessionAffinityConfig{
+		Fallback: &RoundRobinSelector{},
+		TTL:      time.Minute,
+	})
+	defer selector.Stop()
+	authA := &Auth{ID: "auth-a"}
+	authB := &Auth{ID: "auth-b"}
+	opts := cliproxyexecutor.Options{OriginalRequest: []byte(`{"session_id":"temporary-fallback-session"}`)}
+
+	home, err := selector.Pick(context.Background(), "provider", "model-a", opts, []*Auth{authA, authB})
+	if err != nil {
+		t.Fatalf("initial Pick() error = %v", err)
+	}
+	if home.ID != authA.ID {
+		t.Fatalf("initial home = %q, want %q", home.ID, authA.ID)
+	}
+	for index := 0; index < 3; index++ {
+		fallback, errPick := selector.Pick(context.Background(), "provider", "model-a", opts, []*Auth{authB})
+		if errPick != nil {
+			t.Fatalf("fallback Pick() #%d error = %v", index, errPick)
+		}
+		if fallback.ID != authB.ID {
+			t.Fatalf("fallback Pick() #%d = %q, want %q", index, fallback.ID, authB.ID)
+		}
+	}
+	recovered, err := selector.Pick(context.Background(), "provider", "model-a", opts, []*Auth{authA, authB})
+	if err != nil {
+		t.Fatalf("recovery Pick() error = %v", err)
+	}
+	if recovered.ID != authA.ID {
+		t.Fatalf("recovery Pick() = %q, want original home %q", recovered.ID, authA.ID)
+	}
+}
+
+func TestSessionAffinitySelector_ConcurrentInitialBindingUsesOneHome(t *testing.T) {
+	t.Parallel()
+
+	selector := NewSessionAffinitySelectorWithConfig(SessionAffinityConfig{
+		Fallback: &RoundRobinSelector{},
+		TTL:      time.Minute,
+	})
+	defer selector.Stop()
+	auths := []*Auth{{ID: "auth-a"}, {ID: "auth-b"}, {ID: "auth-c"}}
+	opts := cliproxyexecutor.Options{OriginalRequest: []byte(`{"session_id":"concurrent-initial-session"}`)}
+
+	start := make(chan struct{})
+	results := make(chan string, 32)
+	var wait sync.WaitGroup
+	for index := 0; index < cap(results); index++ {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			<-start
+			picked, err := selector.Pick(context.Background(), "provider", "model-a", opts, auths)
+			if err != nil {
+				results <- "error:" + err.Error()
+				return
+			}
+			results <- picked.ID
+		}()
+	}
+	close(start)
+	wait.Wait()
+	close(results)
+
+	first := ""
+	for result := range results {
+		if strings.HasPrefix(result, "error:") {
+			t.Fatal(result)
+		}
+		if first == "" {
+			first = result
+		}
+		if result != first {
+			t.Fatalf("concurrent initial bindings selected both %q and %q", first, result)
 		}
 	}
 }

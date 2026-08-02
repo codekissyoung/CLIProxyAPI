@@ -202,3 +202,30 @@ func TestManager_Update_ActiveInheritsModelStates(t *testing.T) {
 		t.Fatalf("expected BackoffLevel to be %d, got %d", backoffLevel, state.Quota.BackoffLevel)
 	}
 }
+
+func TestManager_Update_ActiveToDisabledInvalidatesSessionAffinity(t *testing.T) {
+	selector := NewSessionAffinitySelector(&RoundRobinSelector{})
+	defer selector.Stop()
+	manager := NewManager(nil, selector, nil)
+	ctx := context.Background()
+	auth := &Auth{ID: "auth-disable-affinity", Provider: "claude", Status: StatusActive}
+	if _, err := manager.Register(ctx, auth); err != nil {
+		t.Fatalf("register auth: %v", err)
+	}
+	selector.cache.Set("claude::session:test", auth.ID)
+	if got := selector.cache.BindingCount(auth.ID); got != 1 {
+		t.Fatalf("binding count before disable = %d, want 1", got)
+	}
+
+	if _, err := manager.Update(ctx, &Auth{
+		ID:       auth.ID,
+		Provider: auth.Provider,
+		Disabled: true,
+		Status:   StatusDisabled,
+	}); err != nil {
+		t.Fatalf("disable auth: %v", err)
+	}
+	if got := selector.cache.BindingCount(auth.ID); got != 0 {
+		t.Fatalf("binding count after disable = %d, want 0", got)
+	}
+}

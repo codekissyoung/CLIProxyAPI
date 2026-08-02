@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	defaultHomeSessionAliasTTL = time.Hour
+	defaultHomeSessionAliasTTL = 24 * time.Hour
 	homeSessionAliasCleanupOps = 256
 	homeSessionAliasSoftLimit  = 4096
 )

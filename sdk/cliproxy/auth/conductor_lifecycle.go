@@ -118,6 +118,8 @@ func (m *Manager) Update(ctx context.Context, auth *Auth) (*Auth, error) {
 		auth.Index = existing.Index
 		auth.indexAssigned = existing.indexAssigned
 	}
+	wasDisabled := existing.Disabled || existing.Status == StatusDisabled
+	isDisabled := auth.Disabled || auth.Status == StatusDisabled
 	auth.Success = existing.Success
 	auth.Failed = existing.Failed
 	auth.recentRequests = existing.recentRequests
@@ -140,6 +142,9 @@ func (m *Manager) Update(ctx context.Context, auth *Auth) (*Auth, error) {
 	}
 	if m.scheduler != nil {
 		m.scheduler.upsertAuth(authClone)
+	}
+	if !wasDisabled && isDisabled {
+		m.invalidateSessionAffinity(auth.ID)
 	}
 	m.queueRefreshReschedule(auth.ID)
 	_ = m.persist(ctx, auth)
