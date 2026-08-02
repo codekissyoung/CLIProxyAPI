@@ -28,7 +28,7 @@ import (
 )
 
 const (
-	codexUserAgent             = "Codex Desktop/0.145.0-alpha.18 (Mac OS 26.5.2; arm64) unknown (Codex Desktop; 26.715.21425)"
+	codexUserAgent             = "Codex Desktop/0.146.0-alpha.3.1 (Mac OS 26.5.2; arm64) unknown (Codex Desktop; 26.721.41059)"
 	codexOriginator            = "Codex Desktop"
 	codexDefaultImageToolModel = "gpt-image-2"
 	codexResponsesLiteHeader   = "X-OpenAI-Internal-Codex-Responses-Lite"
@@ -38,15 +38,18 @@ const (
 // codexFallbackUserAgentPool contains real macOS Codex Desktop User-Agents.
 // Each OAuth auth is pinned to one stable entry to avoid presenting the same
 // account as multiple operating systems while also avoiding one shared relay UA.
+// Entries are refreshed from observed real-client traffic (usage_logs); the
+// 2026-08-02 refresh moved the pool to 0.146.0-alpha builds, keeping two
+// still-common 0.144/0.145 entries for version diversity.
 var codexFallbackUserAgentPool = []string{
 	codexUserAgent,
-	"Codex Desktop/0.145.0-alpha.18 (Mac OS 26.5.2; arm64) unknown (Codex Desktop; 26.715.31925)",
-	"Codex Desktop/0.145.0-alpha.18 (Mac OS 26.5.2; arm64) unknown (Codex Desktop; 26.715.31251)",
+	"Codex Desktop/0.146.0-alpha.3.1 (Mac OS 26.5.2; arm64) unknown (Codex Desktop; 26.721.81911)",
+	"Codex Desktop/0.146.0-alpha.9.2 (Mac OS 26.5.2; arm64) unknown (Codex Desktop; 26.727.51351)",
+	"Codex Desktop/0.146.0-alpha.9.2 (Mac OS 26.5.2; arm64) unknown (Codex Desktop; 26.727.40816)",
+	"Codex Desktop/0.146.0-alpha.3.1 (Mac OS 26.4.0; arm64) unknown (Codex Desktop; 26.721.81911)",
+	"Codex Desktop/0.146.0-alpha.3.1 (Mac OS 26.3.0; arm64) unknown (Codex Desktop; 26.721.41059)",
+	"Codex Desktop/0.145.0-alpha.18 (Mac OS 26.5.2; arm64) unknown (Codex Desktop; 26.715.21425)",
 	"Codex Desktop/0.144.2 (Mac OS 26.5.2; arm64) unknown (Codex Desktop; 26.707.72221)",
-	"Codex Desktop/0.144.2 (Mac OS 26.3.1; arm64) unknown (Codex Desktop; 26.707.71524)",
-	"Codex Desktop/0.144.2 (Mac OS 26.3.0; arm64) unknown (Codex Desktop; 26.707.72221)",
-	"Codex Desktop/0.144.2 (Mac OS 15.6.1; arm64) unknown (Codex Desktop; 26.707.72221)",
-	"Codex Desktop/0.144.5 (Mac OS 26.5.2; arm64) unknown (Codex Desktop; 26.707.91948)",
 }
 
 func codexFallbackUserAgent(auth *cliproxyauth.Auth) string {
