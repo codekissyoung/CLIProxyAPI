@@ -185,8 +185,13 @@ func nextStreamChunk(ctx context.Context, pending *[]coreexecutor.StreamChunk, c
 	} else {
 		chunk, ok = <-chunks
 	}
-	if !ok && closed != nil {
-		*closed = true
+	if !ok {
+		if closed != nil {
+			*closed = true
+		}
+		if ctx != nil && ctx.Err() != nil {
+			return coreexecutor.StreamChunk{}, false, true
+		}
 	}
 	return chunk, ok, false
 }
