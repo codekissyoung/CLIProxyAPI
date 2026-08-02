@@ -1629,6 +1629,23 @@ func TestSessionCacheCountsLogicalAliasGroups(t *testing.T) {
 	}
 }
 
+func TestSessionCacheRejectsWritesAfterStop(t *testing.T) {
+	cache := NewSessionCache(time.Minute)
+	cache.Set("provider::session-a", "auth-a")
+	cache.Stop()
+	cache.Set("provider::session-b", "auth-a")
+
+	if got := cache.BindingCount("auth-a"); got != 0 {
+		t.Fatalf("BindingCount(auth-a) after Stop and Set = %d, want 0", got)
+	}
+	if _, ok := cache.Get("provider::session-a"); ok {
+		t.Fatal("Get() returned a binding after Stop")
+	}
+	if _, ok := cache.Get("provider::session-b"); ok {
+		t.Fatal("Get() returned a post-Stop binding")
+	}
+}
+
 func TestSessionAffinitySelector_MultiModelSession(t *testing.T) {
 	t.Parallel()
 

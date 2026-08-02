@@ -229,3 +229,18 @@ func TestManager_Update_ActiveToDisabledInvalidatesSessionAffinity(t *testing.T)
 		t.Fatalf("binding count after disable = %d, want 0", got)
 	}
 }
+
+func TestManager_SetSelectorStopsPreviousSessionAffinitySelector(t *testing.T) {
+	previous := NewSessionAffinitySelector(&RoundRobinSelector{})
+	manager := NewManager(nil, previous, nil)
+	previous.cache.Set("claude::session:test", "auth-a")
+
+	manager.SetSelector(&RoundRobinSelector{})
+	if got := previous.cache.BindingCount("auth-a"); got != 0 {
+		t.Fatalf("previous selector binding count after replacement = %d, want 0", got)
+	}
+	previous.cache.Set("claude::session:late", "auth-a")
+	if got := previous.cache.BindingCount("auth-a"); got != 0 {
+		t.Fatalf("previous selector accepted a late binding after replacement: %d", got)
+	}
+}

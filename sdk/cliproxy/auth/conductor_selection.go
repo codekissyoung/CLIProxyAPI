@@ -242,11 +242,17 @@ func (m *Manager) SetSelector(selector Selector) {
 		selector = &RoundRobinSelector{}
 	}
 	m.mu.Lock()
+	previous := m.selector
 	m.selector = selector
 	m.mu.Unlock()
 	if m.scheduler != nil {
 		m.scheduler.setSelector(selector)
 		m.syncScheduler()
+	}
+	if previous != selector {
+		if stoppable, ok := previous.(StoppableSelector); ok {
+			stoppable.Stop()
+		}
 	}
 }
 

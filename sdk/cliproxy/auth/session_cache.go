@@ -23,6 +23,7 @@ type SessionCache struct {
 	bindingCountObserver func(authID string, count int)
 	ttl                  time.Duration
 	stopCh               chan struct{}
+	stopped              bool
 }
 
 // NewSessionCache creates a cache with the specified TTL.
@@ -79,6 +80,10 @@ func (c *SessionCache) Get(sessionID string) (string, bool) {
 	}
 	now := time.Now()
 	c.mu.RLock()
+	if c.stopped {
+		c.mu.RUnlock()
+		return "", false
+	}
 	entry, ok := c.entries[sessionID]
 	if ok && now.Before(entry.expiresAt) {
 		c.mu.RUnlock()
@@ -111,6 +116,9 @@ func (c *SessionCache) GetAndRefresh(sessionID string) (string, bool) {
 	now := time.Now()
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.stopped {
+		return "", false
+	}
 	entry, ok := c.entries[sessionID]
 	if !ok {
 		return "", false
@@ -139,6 +147,9 @@ func (c *SessionCache) SetAliases(authID string, sessionIDs ...string) {
 	now := time.Now()
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.stopped {
+		return
+	}
 
 	aliases := mergeSessionAliases(nil, sessionIDs...)
 	previousGroups := make([]sessionEntry, 0, len(sessionIDs))
@@ -285,6 +296,10 @@ func (c *SessionCache) Invalidate(sessionID string) {
 		return
 	}
 	c.mu.Lock()
+	if c.stopped {
+		c.mu.Unlock()
+		return
+	}
 	entry, ok := c.entries[sessionID]
 	if ok {
 		if len(entry.aliases) <= 1 {
@@ -320,6 +335,10 @@ func (c *SessionCache) InvalidateGroup(sessionID string) {
 		return
 	}
 	c.mu.Lock()
+	if c.stopped {
+		c.mu.Unlock()
+		return
+	}
 	if entry, ok := c.entries[sessionID]; ok {
 		c.removeAliasGroupLocked(entry)
 	}
@@ -333,6 +352,10 @@ func (c *SessionCache) InvalidateAuth(authID string) {
 		return
 	}
 	c.mu.Lock()
+	if c.stopped {
+		c.mu.Unlock()
+		return
+	}
 	for _, entry := range c.entries {
 		if entry.authID == authID {
 			c.removeAliasGroupLocked(entry)
@@ -343,13 +366,13 @@ func (c *SessionCache) InvalidateAuth(authID string) {
 
 // Stop terminates the background cleanup goroutine.
 func (c *SessionCache) Stop() {
-	select {
-	case <-c.stopCh:
-		return
-	default:
-		close(c.stopCh)
-	}
 	c.mu.Lock()
+	if c.stopped {
+		c.mu.Unlock()
+		return
+	}
+	c.stopped = true
+	close(c.stopCh)
 	for _, entry := range c.entries {
 		c.removeAliasGroupLocked(entry)
 	}
@@ -379,6 +402,10 @@ func (c *SessionCache) cleanupLoop() {
 func (c *SessionCache) cleanup() {
 	now := time.Now()
 	c.mu.Lock()
+	if c.stopped {
+		c.mu.Unlock()
+		return
+	}
 	for _, entry := range c.entries {
 		if !now.Before(entry.expiresAt) {
 			c.removeAliasGroupLocked(entry)
