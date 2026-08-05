@@ -50,7 +50,10 @@ const (
 	// Fallback for callers that are not the Grok CLI. Requests that do carry a
 	// Grok CLI version forward their own (see applyXAIGrokCLIClientVersion).
 	// Keep in sync with the current Grok CLI client version that chat-proxy expects.
-	xaiClientVersionValue = "0.2.112"
+	xaiClientVersionValue         = "0.2.120"
+	xaiClientIdentifierValue      = "grok-shell"
+	xaiAuthenticateResponseHeader = "x-authenticateresponse"
+	xaiAuthenticateResponseValue  = "authenticate-response"
 	// xaiUsingAPIAttr enables the official API path for non-media HTTP chat.
 	xaiUsingAPIAttr = "using_api"
 )
