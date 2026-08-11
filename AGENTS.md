@@ -13,7 +13,7 @@ go run ./cmd/server # Run dev server
 go test ./... # Run all tests
 go test -v -run TestName ./path/to/pkg # Run single test
 go build -o test-output ./cmd/server && rm test-output # Verify compile (REQUIRED after changes)
-./server-deploy-all.sh # Multi-host production deploy: dry-run by default; add --execute (and optional --target <name>) to build once, distribute to every host in TARGETS, then per-host symlink -> restart -> /healthz check -> auto rollback on failure
+# Production deploy: use scripts/cliproxy-update.sh from the claude-relay-server control repo (see Deployment Notes below); the legacy ./server-deploy-all.sh targets retired hosts
 ```
 - Common flags: `--config <path>`, `--tui`, `--standalone`, `--local-model`, `--no-browser`, `--oauth-callback-port <port>`
 
@@ -62,6 +62,7 @@ go build -o test-output ./cmd/server && rm test-output # Verify compile (REQUIRE
 - For SSE scanners on streaming bodies, follow the project convention `scanner.Buffer(nil, 52_428_800)`; let bufio's lazy 4KB → 2× growth handle buffer sizing. Don't pre-allocate large initial buffers — every other executor (qwen / openai_compat / claude / iflow / gemini) follows this form.
 
 ## Deployment Notes
-- On this production host, the live CLIProxyAPI service is `cliproxyapi` and runs with `-config /home/iec/deploy/etc/cliproxyapi.yaml`.
-- Live auth files/logs are under `~/deploy/auths/`; CLIProxyAPI runtime logs are typically tailed from `~/deploy/auths/logs/main.log`.
-- `server-deploy-all.sh` is the preferred production deployment entrypoint in this repo. It builds the binary once on the control host, then for every host in its `TARGETS` list (currently `cheery-taste`/self, `ice-server`, and `ice-server-2`) distributes the artifact, swaps `~/deploy/bin/cliproxyapi`, restarts `cliproxyapi`, reads the health-check port from `~/deploy/etc/cliproxyapi.yaml`, and rolls back that host to its previous symlink target automatically if restart or `/healthz` fails. It is dry-run by default — pass `--execute` to deploy (optionally `--target <name>` for a single host, `--list` to print the host inventory). Add a new host by appending one line to `TARGETS`.
+- On production hosts, the live CLIProxyAPI service is `cliproxyapi` and runs with `-config /home/iec/deploy/etc/cliproxyapi.yaml`.
+- Live auth files are under `~/deploy/auths/`; runtime logs are written under `~/deploy/logs/` (the old `~/deploy/auths/logs/` path is historical only).
+- Production deployment is driven from the `claude-relay-server` control repo: `scripts/cliproxy-update.sh` runs on the control host (ice-db-server), builds this repo's `ice` checkout at `~/CLIProxyAPI` once, and deploys in canary order `ice-do-db` → `ice-server-4` → `ice-do-web-1` with versioned installs, symlink flip, restart, health/process verification, a per-host relay reload, and release-ledger entries. It is dry-run by default; pass `--execute` (optionally `--host <name>`). Account files (`~/deploy/auths/`) and configs are never touched. The withdrawn `.75` pool and the retired hosts `ice-server` / `ice-server-2` / `ice-server-3` must not be deployed.
+- `server-deploy-all.sh` in this repo is a stale legacy path (its TARGETS still list retired hosts); do not use it for production deploys.
