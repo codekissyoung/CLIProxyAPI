@@ -10,10 +10,9 @@ type invalidParamStatusError struct {
 func (e invalidParamStatusError) Error() string   { return e.msg }
 func (e invalidParamStatusError) StatusCode() int { return e.code }
 
-// Deterministic parameter rejections from the Codex upstream must be classified
-// as request-invalid so the conductor neither fans the request out across every
-// credential nor marks the account unhealthy: no account can serve a body the
-// upstream rejects by shape.
+// HTTP 400 request failures from the Codex upstream must be classified as
+// request-invalid so the conductor neither fans the request out across every
+// credential nor marks the account unhealthy.
 func TestIsRequestInvalidErrorUnsupportedParameter(t *testing.T) {
 	cases := []struct {
 		name string
@@ -36,9 +35,9 @@ func TestIsRequestInvalidErrorUnsupportedParameter(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "generic 400 without parameter rejection still retryable",
+			name: "generic 400 remains request-scoped",
 			err:  invalidParamStatusError{code: 400, msg: `{"detail":"something else"}`},
-			want: false,
+			want: true,
 		},
 		{
 			name: "401 stays auth-scoped, not request-invalid",

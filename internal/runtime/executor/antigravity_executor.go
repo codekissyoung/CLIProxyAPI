@@ -18,6 +18,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
 	internalsignature "github.com/router-for-me/CLIProxyAPI/v7/internal/signature"
 	antigravityclaude "github.com/router-for-me/CLIProxyAPI/v7/internal/translator/antigravity/claude"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/util"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/proxyutil"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v7/sdk/translator"
@@ -134,7 +135,7 @@ func sanitizeAntigravityGeminiRequestSignatures(modelName string, rawJSON []byte
 
 func normalizeAntigravityGeminiFunctionResponseRoles(rawJSON []byte) []byte {
 	rawJSON = repairAntigravityGeminiFunctionResponseNames(rawJSON)
-	contents := gjson.GetBytes(rawJSON, "request.contents")
+	contents := util.GetGJSONBytesNoCopy(rawJSON, "request.contents")
 	if !contents.IsArray() {
 		return rawJSON
 	}
@@ -220,7 +221,7 @@ func normalizeAntigravityGeminiFunctionResponseRoles(rawJSON []byte) []byte {
 }
 
 func repairAntigravityGeminiFunctionResponseNames(rawJSON []byte) []byte {
-	contents := gjson.GetBytes(rawJSON, "request.contents")
+	contents := util.GetGJSONBytesNoCopy(rawJSON, "request.contents")
 	if !contents.IsArray() {
 		return rawJSON
 	}
@@ -302,7 +303,7 @@ func validateAntigravityRequestSignatures(ctx context.Context, modelName string,
 }
 
 func hasAntigravityClaudeTypedWebSearchTool(payload []byte) bool {
-	tools := gjson.GetBytes(payload, "tools")
+	tools := util.GetGJSONBytesNoCopy(payload, "tools")
 	if !tools.IsArray() {
 		return false
 	}
@@ -316,7 +317,7 @@ func hasAntigravityClaudeTypedWebSearchTool(payload []byte) bool {
 }
 
 func hasAntigravityGoogleSearchTool(payload []byte) bool {
-	tools := gjson.GetBytes(payload, "request.tools")
+	tools := util.GetGJSONBytesNoCopy(payload, "request.tools")
 	if !tools.IsArray() {
 		return false
 	}
@@ -342,7 +343,7 @@ func (e *AntigravityExecutor) resolveWebSearchGroundingURLs(ctx context.Context,
 }
 
 func countClaudeThinkingBlocks(rawJSON []byte) int {
-	messages := gjson.GetBytes(rawJSON, "messages")
+	messages := util.GetGJSONBytesNoCopy(rawJSON, "messages")
 	if !messages.IsArray() {
 		return 0
 	}
