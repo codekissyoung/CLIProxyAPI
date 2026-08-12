@@ -148,3 +148,48 @@ func TestGinLogrusLoggerAddsRequestIDForCodexBackend(t *testing.T) {
 		t.Fatalf("expected Gin request ID %q to match context request ID %q", requestIDFromGin, requestIDFromContext)
 	}
 }
+
+func TestShouldSkipGinRequestLoggingSuppressesOnlySuccessfulMetrics(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name       string
+		path       string
+		statusCode int
+		want       bool
+	}{
+		{name: "metrics ok", path: "/metrics", statusCode: http.StatusOK, want: true},
+		{name: "metrics no content", path: "/metrics", statusCode: http.StatusNoContent, want: true},
+		{name: "metrics client error", path: "/metrics", statusCode: http.StatusBadRequest, want: false},
+		{name: "metrics server error", path: "/metrics", statusCode: http.StatusInternalServerError, want: false},
+		{name: "metrics subpath", path: "/metrics/details", statusCode: http.StatusOK, want: false},
+		{name: "health check", path: "/healthz", statusCode: http.StatusOK, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodGet, tt.path, nil)
+			c.Status(tt.statusCode)
+
+			if got := shouldSkipGinRequestLogging(c); got != tt.want {
+				t.Fatalf("shouldSkipGinRequestLogging() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestShouldSkipGinRequestLoggingHonorsExplicitSkip(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/management.html", nil)
+	c.Status(http.StatusInternalServerError)
+	SkipGinRequestLogging(c)
+
+	if !shouldSkipGinRequestLogging(c) {
+		t.Fatal("expected explicit skip marker to suppress request logging")
+	}
+}

@@ -146,11 +146,18 @@ func shouldSkipGinRequestLogging(c *gin.Context) bool {
 		return false
 	}
 	val, exists := c.Get(skipGinLogKey)
-	if !exists {
+	if exists {
+		flag, ok := val.(bool)
+		if ok && flag {
+			return true
+		}
+	}
+
+	if c.Request == nil || c.Request.URL == nil || c.Request.URL.Path != "/metrics" {
 		return false
 	}
-	flag, ok := val.(bool)
-	return ok && flag
+	statusCode := c.Writer.Status()
+	return statusCode >= http.StatusOK && statusCode < http.StatusMultipleChoices
 }
 
 func creditsUsed(c *gin.Context) bool {
