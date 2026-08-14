@@ -75,7 +75,7 @@ func SanitizeCodexResponsesRequest(rawJSON []byte) []byte {
 		rawJSON = deleteCodexRequestFields(rawJSON, "service_tier")
 	}
 
-	rawJSON = deleteCodexRequestFields(rawJSON, "truncation")
+	rawJSON = deleteCodexRequestFields(rawJSON, "truncation", "prompt_cache_options")
 	rawJSON = applyResponsesCompactionCompatibility(rawJSON)
 
 	// Codex Responses rejects chat-style response_format and metadata; map
