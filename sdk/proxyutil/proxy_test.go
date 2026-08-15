@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -76,6 +77,28 @@ func TestBuildHTTPTransportDirectBypassesProxy(t *testing.T) {
 	}
 	if transport.Proxy != nil {
 		t.Fatal("expected direct transport to disable proxy function")
+	}
+}
+
+func TestIPv4OnlyDirectSupportsContextCancellation(t *testing.T) {
+	t.Parallel()
+
+	contextDialer, ok := IPv4OnlyDirect.(interface {
+		DialContext(context.Context, string, string) (net.Conn, error)
+	})
+	if !ok {
+		t.Fatal("IPv4OnlyDirect does not support context cancellation")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	conn, errDial := contextDialer.DialContext(ctx, "tcp", "192.0.2.1:443")
+	if conn != nil {
+		_ = conn.Close()
+		t.Fatal("canceled direct dial returned a connection")
+	}
+	if !errors.Is(errDial, context.Canceled) {
+		t.Fatalf("DialContext error = %v, want context canceled", errDial)
 	}
 }
 

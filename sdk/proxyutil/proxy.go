@@ -94,11 +94,17 @@ var IPv4OnlyDirect proxy.Dialer = ipv4OnlyDirectDialer{}
 
 type ipv4OnlyDirectDialer struct{}
 
+var _ proxy.ContextDialer = ipv4OnlyDirectDialer{}
+
 func (ipv4OnlyDirectDialer) Dial(network, addr string) (net.Conn, error) {
 	if network == "tcp" {
 		network = "tcp4"
 	}
 	return ipv4OnlyDialer.Dial(network, addr)
+}
+
+func (ipv4OnlyDirectDialer) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	return IPv4OnlyDialContext(ctx, network, addr)
 }
 
 // EnforceIPv4OnlyDefaultTransport mutates http.DefaultTransport in place so every
