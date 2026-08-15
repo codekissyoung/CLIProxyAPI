@@ -42,6 +42,7 @@ go build -o test-output ./cmd/server && rm test-output # Verify compile (REQUIRE
 - `sdk/cliproxy/` — Embeddable SDK entry (service/builder/watchers/pipeline)
 - `test/` — Cross-module integration tests
 - **Forwarding model**: This is a transparent proxy — the upstream provider should see traffic that looks like a single real client per account, not a multi-tenant gateway. Avoid shared connection pools, large `MaxIdleConnsPerHost` values, `DisableCompression` toggles, or any other knob that would create a fingerprint distinct from a vanilla SDK. When caching transports/clients per auth, key by `auth.ID + effectiveProxyURL` (auth-level proxy first, then `cfg.ProxyURL`) so global proxy hot-reloads route to fresh pools.
+- **Context-aware uTLS dialing**: Protected-host transports pass request contexts through dialing and handshake. Every default/direct/proxy dialer used there must implement `proxy.ContextDialer`; `proxyutil.IPv4OnlyDirect` must keep the `tcp` to `tcp4` rewrite in both `Dial` and `DialContext`. Preserve the compile-time assertion and cancellation regression test. Process/root/port health does not exercise this path, so production verification must include a pinned Codex Responses probe after transport merges.
 
 ## Code Conventions
 - Keep changes small and simple (KISS)
