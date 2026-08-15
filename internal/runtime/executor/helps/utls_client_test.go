@@ -14,35 +14,23 @@ import (
 	"net/url"
 	"os"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/gorilla/websocket"
 	tls "github.com/refraction-networking/utls"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
+	"github.com/router-for-me/CLIProxyAPI/v7/sdk/proxyutil"
 )
 
 type utlsClientRoundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f utlsClientRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
-}
-
-type trackedReadCloser struct {
-	io.Reader
-	closeCount int
-	closeErr   error
-	onClose    func()
-}
-
-func (r *trackedReadCloser) Close() error {
-	r.closeCount++
-	if r.onClose != nil {
-		r.onClose()
-	}
-	return r.closeErr
 }
 
 type contextDialerFunc func(context.Context, string, string) (net.Conn, error)
@@ -65,75 +53,21 @@ func (c *trackedNetConn) Close() error {
 	return c.Conn.Close()
 }
 
-func TestCloseConnectionBodyClosesConnectionBeforeBodyOnce(t *testing.T) {
-	bodyErr := errors.New("body close failed")
-	connectionErr := errors.New("connection close failed")
-	var closeOrder []string
-	body := &trackedReadCloser{
-		Reader:   strings.NewReader("response"),
-		closeErr: bodyErr,
-		onClose: func() {
-			closeOrder = append(closeOrder, "body")
-		},
-	}
-	connectionCloseCount := 0
-	wrapped := &closeConnectionBody{
-		ReadCloser: body,
-		closeConnection: func() error {
-			connectionCloseCount++
-			closeOrder = append(closeOrder, "connection")
-			return connectionErr
-		},
-	}
-
-	payload, errRead := io.ReadAll(wrapped)
-	if errRead != nil {
-		t.Fatal(errRead)
-	}
-	if got, want := string(payload), "response"; got != want {
-		t.Fatalf("response body = %q, want %q", got, want)
-	}
-
-	errClose := wrapped.Close()
-	if !errors.Is(errClose, bodyErr) {
-		t.Fatalf("close error = %v, want body close error", errClose)
-	}
-	if !errors.Is(errClose, connectionErr) {
-		t.Fatalf("close error = %v, want connection close error", errClose)
-	}
-	if errCloseAgain := wrapped.Close(); errCloseAgain != errClose {
-		t.Fatalf("second close error = %v, want %v", errCloseAgain, errClose)
-	}
-	if body.closeCount != 1 {
-		t.Fatalf("body close count = %d, want 1", body.closeCount)
-	}
-	if connectionCloseCount != 1 {
-		t.Fatalf("connection close count = %d, want 1", connectionCloseCount)
-	}
-	if want := []string{"connection", "body"}; !reflect.DeepEqual(closeOrder, want) {
-		t.Fatalf("close order = %v, want %v", closeOrder, want)
-	}
-}
-
-func TestUtlsRoundTripperDialUsesRequestContext(t *testing.T) {
+func TestCodexCLIHTTPDialUsesRequestContext(t *testing.T) {
 	dialStarted := make(chan struct{})
-	roundTripper := &utlsRoundTripper{dialer: contextDialerFunc(func(ctx context.Context, _, _ string) (net.Conn, error) {
+	roundTripper := &codexCLIHTTPRoundTripper{dialer: contextDialerFunc(func(ctx context.Context, _, _ string) (net.Conn, error) {
 		close(dialStarted)
 		<-ctx.Done()
 		return nil, ctx.Err()
 	})}
 	ctx, cancel := context.WithCancel(t.Context())
-	req, errRequest := http.NewRequestWithContext(ctx, http.MethodGet, "https://chatgpt.com/backend-api/codex/responses", nil)
-	if errRequest != nil {
-		t.Fatal(errRequest)
-	}
-	roundTripDone := make(chan error, 1)
+	dialDone := make(chan error, 1)
 	go func() {
-		resp, errRoundTrip := roundTripper.RoundTrip(req)
-		if resp != nil && resp.Body != nil {
-			errRoundTrip = errors.Join(errRoundTrip, resp.Body.Close())
+		conn, errDial := roundTripper.dialTLSContext(ctx, "tcp", "chatgpt.com:443")
+		if conn != nil {
+			errDial = errors.Join(errDial, conn.Close())
 		}
-		roundTripDone <- errRoundTrip
+		dialDone <- errDial
 	}()
 
 	select {
@@ -143,16 +77,16 @@ func TestUtlsRoundTripperDialUsesRequestContext(t *testing.T) {
 	}
 	cancel()
 	select {
-	case errRoundTrip := <-roundTripDone:
-		if !errors.Is(errRoundTrip, context.Canceled) {
-			t.Fatalf("RoundTrip error = %v, want context canceled", errRoundTrip)
+	case errDial := <-dialDone:
+		if !errors.Is(errDial, context.Canceled) {
+			t.Fatalf("dialTLSContext error = %v, want context canceled", errDial)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("RoundTrip did not stop after context cancellation")
+		t.Fatal("dialTLSContext did not stop after context cancellation")
 	}
 }
 
-func TestUtlsRoundTripperHandshakeUsesRequestContext(t *testing.T) {
+func TestCodexCLIHTTPHandshakeUsesRequestContext(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	t.Cleanup(func() {
 		if errClose := clientConn.Close(); errClose != nil && !errors.Is(errClose, net.ErrClosed) && !errors.Is(errClose, io.ErrClosedPipe) {
@@ -165,16 +99,16 @@ func TestUtlsRoundTripperHandshakeUsesRequestContext(t *testing.T) {
 
 	trackedConn := &trackedNetConn{Conn: clientConn}
 	dialDone := make(chan struct{})
-	roundTripper := &utlsRoundTripper{dialer: contextDialerFunc(func(context.Context, string, string) (net.Conn, error) {
+	roundTripper := &codexCLIHTTPRoundTripper{dialer: contextDialerFunc(func(context.Context, string, string) (net.Conn, error) {
 		close(dialDone)
 		return trackedConn, nil
 	})}
 	ctx, cancel := context.WithCancel(t.Context())
 	connectionDone := make(chan error, 1)
 	go func() {
-		h2Conn, errConnect := roundTripper.createConnection(ctx, "chatgpt.com", "chatgpt.com:443")
-		if h2Conn != nil {
-			errConnect = errors.Join(errConnect, h2Conn.Close())
+		conn, errConnect := roundTripper.dialTLSContext(ctx, "tcp", "chatgpt.com:443")
+		if conn != nil {
+			errConnect = errors.Join(errConnect, conn.Close())
 		}
 		connectionDone <- errConnect
 	}()
@@ -188,13 +122,33 @@ func TestUtlsRoundTripperHandshakeUsesRequestContext(t *testing.T) {
 	select {
 	case errConnect := <-connectionDone:
 		if !errors.Is(errConnect, context.Canceled) {
-			t.Fatalf("createConnection error = %v, want context canceled", errConnect)
+			t.Fatalf("dialTLSContext error = %v, want context canceled", errConnect)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("TLS handshake did not stop after context cancellation")
 	}
-	if got := trackedConn.closeCount.Load(); got != 1 {
-		t.Fatalf("connection close count = %d, want 1", got)
+	if got := trackedConn.closeCount.Load(); got < 1 {
+		t.Fatalf("connection close count = %d, want at least 1", got)
+	}
+}
+
+func TestCodexCLIDialForcesIPv4AndDirectModeKeepsIPv4Dialer(t *testing.T) {
+	t.Parallel()
+
+	if got := codexCLIProxyDialer("direct"); got != proxyutil.IPv4OnlyDirect {
+		t.Fatalf("direct Codex CLI dialer = %T, want proxyutil.IPv4OnlyDirect", got)
+	}
+	wantErr := errors.New("stop after network capture")
+	networkSeen := ""
+	_, errDial := dialCodexCLIContext(t.Context(), contextDialerFunc(func(_ context.Context, network, _ string) (net.Conn, error) {
+		networkSeen = network
+		return nil, wantErr
+	}), "tcp", "chatgpt.com:443")
+	if !errors.Is(errDial, wantErr) {
+		t.Fatalf("dial error = %v, want %v", errDial, wantErr)
+	}
+	if networkSeen != "tcp4" {
+		t.Fatalf("dial network = %q, want tcp4", networkSeen)
 	}
 }
 
@@ -289,6 +243,114 @@ func TestClaudeCodeTLSClientHelloSpecMatches220Capture(t *testing.T) {
 	}
 }
 
+func TestCodexCLIHTTPClientHelloSpecMatches0147Capture(t *testing.T) {
+	t.Parallel()
+
+	spec := codexCLIHTTPClientHelloSpec()
+	record := captureClientHello(t, &tls.Config{ServerName: "chatgpt.com"}, spec)
+	var wireExtensions []uint16
+	for _, extension := range parseClientHelloExtensionLengths(t, record) {
+		wireExtensions = append(wireExtensions, uint16(extension[0]))
+	}
+	actual := summarizeClaudeCodeClientHelloSpec(t, spec)
+	want := claudeCodeClientHelloSummary{
+		CipherSuites: []uint16{
+			4866, 4867, 4865, 49196, 49200, 159, 52393, 52392, 52394, 49195,
+			49199, 158, 49188, 49192, 107, 49187, 49191, 103, 49162, 49172,
+			57, 49161, 49171, 51, 157, 156, 61, 60, 53, 47,
+		},
+		ExtensionTypes:      []uint16{65281, 0, 11, 10, 35, 22, 23, 13, 43, 45, 51},
+		SupportedGroups:     []uint16{4588, 29, 23, 30, 24, 25, 256, 257},
+		PointFormats:        []uint8{0},
+		SignatureAlgorithms: []uint16{2309, 2310, 2308, 1027, 1283, 1539, 2055, 2056, 2074, 2075, 2076, 2057, 2058, 2059, 2052, 2053, 2054, 1025, 1281, 1537, 771, 769, 770, 1026, 1282, 1538},
+		SupportedVersions:   []uint16{772, 771},
+		KeyShareGroups:      []uint16{4588, 29},
+		JA3:                 "771,4866-4867-4865-49196-49200-159-52393-52392-52394-49195-49199-158-49188-49192-107-49187-49191-103-49162-49172-57-49161-49171-51-157-156-61-60-53-47,65281-0-11-10-35-22-23-13-43-45-51,4588-29-23-30-24-25-256-257,0",
+		JA3MD5:              "0b85eb0d4981e69064e40753e4f0ac5f",
+	}
+	if !reflect.DeepEqual(actual, want) {
+		t.Fatalf("Codex CLI HTTP ClientHello = %#v, want %#v", actual, want)
+	}
+	if !reflect.DeepEqual(wireExtensions, want.ExtensionTypes) {
+		t.Fatalf("Codex CLI HTTP wire extensions = %v, want %v", wireExtensions, want.ExtensionTypes)
+	}
+
+	roundTripper := newCodexCLIHTTPRoundTripper("")
+	if roundTripper.transport.ForceAttemptHTTP2 {
+		t.Fatal("Codex CLI HTTP transport must not force HTTP/2")
+	}
+	if roundTripper.transport.DialTLSContext == nil {
+		t.Fatal("Codex CLI HTTP transport must install its captured TLS dialer")
+	}
+	if got := codexCLIRequestHeaderOrder(http.MethodPost, "/backend-api/codex/responses"); !reflect.DeepEqual(got, codexCLIHTTPHeaderOrder) {
+		t.Fatalf("Codex CLI header order = %v, want %v", got, codexCLIHTTPHeaderOrder)
+	}
+	wantHeaderOrder := []string{
+		"Version", "X-Codex-Beta-Features", "X-Codex-Window-Id", "X-Codex-Turn-Metadata",
+		"X-OpenAI-Internal-Codex-Responses-Lite", "X-Client-Request-Id", "Session-Id", "Thread-Id",
+		"Accept", "Content-Type", "Authorization", "Originator", "User-Agent", "Host", "Content-Length",
+	}
+	if !reflect.DeepEqual(codexCLIHTTPHeaderOrder, wantHeaderOrder) {
+		t.Fatalf("Codex CLI HTTP header order = %v, want captured order %v", codexCLIHTTPHeaderOrder, wantHeaderOrder)
+	}
+}
+
+func TestCodexCLIWebsocketClientHelloSpecMatches0147Capture(t *testing.T) {
+	t.Parallel()
+
+	wantCiphers := []uint16{4866, 4865, 4867, 49196, 49195, 52393, 49200, 49199, 52392, 255}
+	wantExtensions := []uint16{0, 5, 10, 11, 13, 23, 35, 43, 45, 51}
+	wantGroups := []uint16{4588, 29, 23, 24}
+	wantSignatures := []uint16{1283, 1027, 1539, 2055, 2054, 2053, 2052, 1537, 1281, 1025}
+	wantVersions := []uint16{772, 771}
+	wantShares := []uint16{4588, 29}
+	orders := make(map[string]struct{})
+	for i := 0; i < 12; i++ {
+		record := captureClientHello(t, &tls.Config{ServerName: "api.openai.com"}, codexCLIWebsocketClientHelloSpec())
+		spec, errFingerprint := (&tls.Fingerprinter{}).FingerprintClientHello(record)
+		if errFingerprint != nil {
+			t.Fatal(errFingerprint)
+		}
+		actual := summarizeClaudeCodeClientHelloSpec(t, spec)
+		if !reflect.DeepEqual(actual.CipherSuites, wantCiphers) {
+			t.Fatalf("websocket cipher suites = %v, want %v", actual.CipherSuites, wantCiphers)
+		}
+		sortedExtensions := append([]uint16(nil), actual.ExtensionTypes...)
+		slices.Sort(sortedExtensions)
+		if !reflect.DeepEqual(sortedExtensions, wantExtensions) {
+			t.Fatalf("websocket extension set = %v, want %v", sortedExtensions, wantExtensions)
+		}
+		if !reflect.DeepEqual(actual.SupportedGroups, wantGroups) {
+			t.Fatalf("websocket supported groups = %v, want %v", actual.SupportedGroups, wantGroups)
+		}
+		if !reflect.DeepEqual(actual.SignatureAlgorithms, wantSignatures) {
+			t.Fatalf("websocket signature algorithms = %v, want %v", actual.SignatureAlgorithms, wantSignatures)
+		}
+		if !reflect.DeepEqual(actual.SupportedVersions, wantVersions) {
+			t.Fatalf("websocket supported versions = %v, want %v", actual.SupportedVersions, wantVersions)
+		}
+		if !reflect.DeepEqual(actual.KeyShareGroups, wantShares) {
+			t.Fatalf("websocket key shares = %v, want %v", actual.KeyShareGroups, wantShares)
+		}
+		if len(actual.ALPN) != 0 {
+			t.Fatalf("websocket ALPN = %v, want none for HTTP/1.1 upgrade", actual.ALPN)
+		}
+		orders[fmt.Sprint(actual.ExtensionTypes)] = struct{}{}
+	}
+	if len(orders) < 2 {
+		t.Fatalf("websocket extension order did not vary across captures: %v", orders)
+	}
+	wantHeaderOrder := []string{
+		"Host", "Connection", "Upgrade", "Sec-WebSocket-Version", "Sec-WebSocket-Key",
+		"Authorization", "User-Agent", "Originator", "OpenAI-Beta", "X-Codex-Turn-Metadata",
+		"Version", "X-Codex-Beta-Features", "X-Client-Request-Id", "Session-Id", "Thread-Id",
+		"X-Codex-Window-Id", "Sec-WebSocket-Extensions",
+	}
+	if !reflect.DeepEqual(codexCLIWebsocketHeaderOrder, wantHeaderOrder) {
+		t.Fatalf("Codex CLI websocket header order = %v, want captured order %v", codexCLIWebsocketHeaderOrder, wantHeaderOrder)
+	}
+}
+
 func TestClaudeCodeTLSResumptionIsWireSafe(t *testing.T) {
 	t.Parallel()
 
@@ -380,6 +442,66 @@ func TestClaudeCodeTLSClientHelloCapture(t *testing.T) {
 	}
 }
 
+func TestCodexCLITLSLiveHandshake(t *testing.T) {
+	if os.Getenv("CPA_CODEX_TLS_LIVE") != "1" {
+		t.Skip("CPA_CODEX_TLS_LIVE is not set to 1")
+	}
+
+	client := NewUtlsHTTPClient(t.Context(), nil, nil, 15*time.Second)
+	req, errRequest := http.NewRequestWithContext(t.Context(), http.MethodPost, "https://chatgpt.com/backend-api/codex/responses", bytes.NewBufferString(`{"model":"gpt-5.6-terra","input":[]}`))
+	if errRequest != nil {
+		t.Fatal(errRequest)
+	}
+	req.Header.Set("Authorization", "Bearer dummy-codex-tls-handshake")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "codex-tui/0.147.0 (Ubuntu 24.4.0; x86_64) dumb (codex-tui; 0.147.0)")
+	resp, errDo := client.Do(req)
+	if errDo != nil {
+		t.Fatal(errDo)
+	}
+	if errClose := resp.Body.Close(); errClose != nil {
+		t.Fatal(errClose)
+	}
+	if resp.StatusCode < 100 {
+		t.Fatalf("invalid HTTP status %d", resp.StatusCode)
+	}
+}
+
+func TestCodexCLIWebsocketTLSLiveHandshake(t *testing.T) {
+	if os.Getenv("CPA_CODEX_TLS_LIVE") != "1" {
+		t.Skip("CPA_CODEX_TLS_LIVE is not set to 1")
+	}
+
+	dialContext, dialTLSContext := NewCodexCLIWebsocketDialFunctions("")
+	dialer := &websocket.Dialer{
+		Proxy:             nil,
+		HandshakeTimeout:  15 * time.Second,
+		EnableCompression: true,
+		NetDialContext:    dialContext,
+		NetDialTLSContext: dialTLSContext,
+	}
+	headers := http.Header{
+		"Authorization": []string{"Bearer dummy-codex-websocket-tls-handshake"},
+		"Originator":    []string{"codex-tui"},
+		"User-Agent":    []string{"codex-tui/0.147.0 (Ubuntu 24.4.0; x86_64) dumb (codex-tui; 0.147.0)"},
+		"Version":       []string{"0.147.0"},
+	}
+	conn, resp, errDial := dialer.DialContext(t.Context(), "wss://chatgpt.com/backend-api/codex/responses", headers)
+	if conn != nil {
+		_ = conn.Close()
+	}
+	if resp != nil && resp.Body != nil {
+		defer func() {
+			if errClose := resp.Body.Close(); errClose != nil {
+				t.Errorf("close websocket response: %v", errClose)
+			}
+		}()
+	}
+	if errDial != nil && resp == nil {
+		t.Fatalf("websocket TLS/HTTP upgrade did not reach an upstream response: %v", errDial)
+	}
+}
+
 func TestFallbackRoundTripperSelectsProviderFingerprint(t *testing.T) {
 	t.Parallel()
 
@@ -395,7 +517,7 @@ func TestFallbackRoundTripperSelectsProviderFingerprint(t *testing.T) {
 	}
 	roundTripper := &fallbackRoundTripper{
 		anthropic: route("anthropic"),
-		chrome:    route("chrome"),
+		codex:     route("codex"),
 		fallback:  route("fallback"),
 	}
 	tests := []struct {
@@ -408,7 +530,7 @@ func TestFallbackRoundTripperSelectsProviderFingerprint(t *testing.T) {
 		{name: "Anthropic custom port", url: "https://api.anthropic.com:8443/v1/messages", want: "fallback"},
 		{name: "Anthropic userinfo", url: "https://caller@api.anthropic.com/v1/messages", want: "fallback"},
 		{name: "Anthropic lookalike", url: "https://api.anthropic.com.example/v1/messages", want: "fallback"},
-		{name: "ChatGPT HTTPS", url: "https://chatgpt.com/backend-api/codex/responses", want: "chrome"},
+		{name: "ChatGPT HTTPS", url: "https://chatgpt.com/backend-api/codex/responses", want: "codex"},
 		{name: "Other HTTPS", url: "https://example.com/v1/messages", want: "fallback"},
 		{name: "Anthropic HTTP", url: "http://api.anthropic.com/v1/messages", want: "fallback"},
 	}
@@ -486,7 +608,7 @@ func TestNewUtlsRoundTripperRoutesByHost(t *testing.T) {
 	if !ok {
 		t.Fatal("NewUtlsRoundTripper did not return a *fallbackRoundTripper")
 	}
-	if rt.anthropic == nil || rt.chrome == nil {
+	if rt.anthropic == nil || rt.codex == nil {
 		t.Fatal("expected provider-fingerprint RoundTrippers to be configured")
 	}
 
@@ -504,7 +626,7 @@ func TestNewUtlsRoundTripperRoutesByHost(t *testing.T) {
 	}
 
 	// api.anthropic.com must be recognized for the Claude Code fingerprint leg;
-	// chatgpt.com stays hardcoded on the chrome leg in fallbackRoundTripper.
+	// chatgpt.com stays hardcoded on the Codex CLI leg in fallbackRoundTripper.
 	anthropicURL, errParse := url.Parse("https://api.anthropic.com/v1/messages")
 	if errParse != nil {
 		t.Fatal(errParse)
@@ -529,6 +651,14 @@ type claudeCodeClientHelloSummary struct {
 
 func captureClaudeCodeClientHello(t *testing.T) []byte {
 	t.Helper()
+	// Use the production config so the captured bytes reflect the real dial path,
+	// including the resumption settings.
+	cfg := newClaudeCodeTLSConfig("api.anthropic.com", tls.NewLRUClientSessionCache(claudeCodeSessionCacheCapacity))
+	return captureClientHello(t, cfg, claudeCodeTLSClientHelloSpec())
+}
+
+func captureClientHello(t *testing.T, cfg *tls.Config, spec *tls.ClientHelloSpec) []byte {
+	t.Helper()
 
 	clientConn, serverConn := net.Pipe()
 	t.Cleanup(func() {
@@ -539,11 +669,8 @@ func captureClaudeCodeClientHello(t *testing.T) []byte {
 			t.Errorf("close server pipe: %v", errClose)
 		}
 	})
-	// Use the production config so the captured bytes reflect the real dial path,
-	// including the resumption settings.
-	cfg := newClaudeCodeTLSConfig("api.anthropic.com", tls.NewLRUClientSessionCache(claudeCodeSessionCacheCapacity))
 	tlsConn := tls.UClient(clientConn, cfg, tls.HelloCustom)
-	if errPreset := tlsConn.ApplyPreset(claudeCodeTLSClientHelloSpec()); errPreset != nil {
+	if errPreset := tlsConn.ApplyPreset(spec); errPreset != nil {
 		t.Fatal(errPreset)
 	}
 	handshakeDone := make(chan error, 1)
@@ -661,6 +788,8 @@ func summarizeClaudeCodeClientHelloSpec(t *testing.T, spec *tls.ClientHelloSpec)
 			summary.SupportedVersions = append(summary.SupportedVersions, ext.Versions...)
 		case *tls.UtlsPaddingExtension:
 			summary.ExtensionTypes = append(summary.ExtensionTypes, 21)
+		case *tls.GenericExtension:
+			summary.ExtensionTypes = append(summary.ExtensionTypes, ext.Id)
 		default:
 			t.Fatalf("unexpected ClientHello extension type %T", extension)
 		}

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"hash/fnv"
 	"net/http"
 	"strings"
 	"sync"
@@ -28,41 +27,20 @@ import (
 )
 
 const (
-	codexUserAgent             = "Codex Desktop/0.146.0-alpha.3.1 (Mac OS 26.5.2; arm64) unknown (Codex Desktop; 26.721.41059)"
-	codexOriginator            = "Codex Desktop"
+	codexUserAgent             = "codex-tui/0.147.0 (Ubuntu 24.4.0; x86_64) dumb (codex-tui; 0.147.0)"
+	codexOriginator            = "codex-tui"
+	codexVersion               = "0.147.0"
+	codexBetaFeatures          = "remote_compaction_v2"
 	codexDefaultImageToolModel = "gpt-image-2"
 	codexResponsesLiteHeader   = "X-OpenAI-Internal-Codex-Responses-Lite"
 	codexResponsesLiteMetadata = "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite"
 )
 
-// codexFallbackUserAgentPool contains real macOS Codex Desktop User-Agents.
-// Each OAuth auth is pinned to one stable entry to avoid presenting the same
-// account as multiple operating systems while also avoiding one shared relay UA.
-// Entries are refreshed from observed real-client traffic (usage_logs); the
-// 2026-08-02 refresh moved the pool to 0.146.0-alpha builds, keeping two
-// still-common 0.144/0.145 entries for version diversity.
-var codexFallbackUserAgentPool = []string{
-	codexUserAgent,
-	"Codex Desktop/0.146.0-alpha.3.1 (Mac OS 26.5.2; arm64) unknown (Codex Desktop; 26.721.81911)",
-	"Codex Desktop/0.146.0-alpha.9.2 (Mac OS 26.5.2; arm64) unknown (Codex Desktop; 26.727.51351)",
-	"Codex Desktop/0.146.0-alpha.9.2 (Mac OS 26.5.2; arm64) unknown (Codex Desktop; 26.727.40816)",
-	"Codex Desktop/0.146.0-alpha.3.1 (Mac OS 26.4.0; arm64) unknown (Codex Desktop; 26.721.81911)",
-	"Codex Desktop/0.146.0-alpha.3.1 (Mac OS 26.3.0; arm64) unknown (Codex Desktop; 26.721.41059)",
-	"Codex Desktop/0.145.0-alpha.18 (Mac OS 26.5.2; arm64) unknown (Codex Desktop; 26.715.21425)",
-	"Codex Desktop/0.144.2 (Mac OS 26.5.2; arm64) unknown (Codex Desktop; 26.707.72221)",
-}
-
-func codexFallbackUserAgent(auth *cliproxyauth.Auth) string {
-	if auth == nil {
-		return codexUserAgent
-	}
-	id := strings.TrimSpace(auth.ID)
-	if id == "" {
-		return codexUserAgent
-	}
-	h := fnv.New32a()
-	_, _ = h.Write([]byte(id))
-	return codexFallbackUserAgentPool[h.Sum32()%uint32(len(codexFallbackUserAgentPool))]
+// codexFallbackUserAgent intentionally converges every OAuth account on one
+// captured Codex CLI persona. Per-account variation here would contradict the
+// stable 0.147.0 transport profile used on the wire.
+func codexFallbackUserAgent(_ *cliproxyauth.Auth) string {
+	return codexUserAgent
 }
 
 var dataTag = []byte("data:")
@@ -111,8 +89,12 @@ func retireStaleCodexTransports(authID, keepKey string) {
 			return true
 		}
 		if old, deleted := codexTransportCache.LoadAndDelete(key); deleted {
-			if cached, okCached := old.(*codexCachedTransport); okCached && cached != nil && cached.base != nil {
-				cached.base.CloseIdleConnections()
+			if cached, okCached := old.(*codexCachedTransport); okCached && cached != nil {
+				if closer, okCloser := cached.rt.(interface{ CloseIdleConnections() }); okCloser {
+					closer.CloseIdleConnections()
+				} else if cached.base != nil {
+					cached.base.CloseIdleConnections()
+				}
 			}
 		}
 		return true
@@ -488,18 +470,27 @@ func applyCodexDirectImageHeaders(r *http.Request, auth *cliproxyauth.Auth, toke
 	if ginCtx, ok := r.Context().Value("gin").(*gin.Context); ok && ginCtx != nil && ginCtx.Request != nil {
 		ginHeaders = ginCtx.Request.Header.Clone()
 		ginHeaders.Del("User-Agent")
+		ginHeaders.Del("Originator")
 	}
 	applyCodexHeadersFromSources(r, auth, token, stream, cfg, ginHeaders)
+	if r.Header.Get("User-Agent") == codexUserAgent && strings.TrimSpace(r.Header.Get("Originator")) == "" {
+		r.Header.Set("Originator", codexOriginator)
+	}
 }
 
 func applyCodexHeadersFromSources(r *http.Request, auth *cliproxyauth.Auth, token string, stream bool, cfg *config.Config, ginHeaders http.Header) {
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("Authorization", "Bearer "+token)
 
-	if ginHeaders != nil && ginHeaders.Get("X-Codex-Beta-Features") != "" {
-		r.Header.Set("X-Codex-Beta-Features", ginHeaders.Get("X-Codex-Beta-Features"))
+	isAPIKey := codexAuthUsesAPIKey(auth)
+	cfgUserAgent, _ := codexHeaderDefaults(cfg, auth)
+	if isAPIKey {
+		ensureHeaderWithPriority(r.Header, ginHeaders, "X-Codex-Beta-Features", "", "")
+		misc.EnsureHeader(r.Header, ginHeaders, "Version", "")
+	} else {
+		ensureHeaderWithPriority(r.Header, ginHeaders, "X-Codex-Beta-Features", "", codexBetaFeatures)
+		misc.EnsureHeader(r.Header, ginHeaders, "Version", codexVersion)
 	}
-	misc.EnsureHeader(r.Header, ginHeaders, "Version", "")
 	misc.EnsureHeader(r.Header, ginHeaders, "X-Codex-Turn-Metadata", "")
 	stripCodexTurnMetadataWorkspaces(r.Header)
 	misc.EnsureHeader(r.Header, ginHeaders, "X-Client-Request-Id", "")
@@ -507,14 +498,12 @@ func applyCodexHeadersFromSources(r *http.Request, auth *cliproxyauth.Auth, toke
 	misc.EnsureHeader(r.Header, ginHeaders, "Thread-Id", "")
 	misc.EnsureHeader(r.Header, ginHeaders, "Session-Id", "")
 	misc.EnsureHeader(r.Header, ginHeaders, codexResponsesLiteHeader, "")
-	isAPIKey := codexAuthUsesAPIKey(auth)
-	cfgUserAgent, _ := codexHeaderDefaults(cfg, auth)
 	fallbackUserAgent := codexFallbackUserAgent(auth)
 	ensureHeaderWithConfigPrecedence(r.Header, ginHeaders, "User-Agent", cfgUserAgent, fallbackUserAgent)
 
 	cloakingDisabled := cfg != nil && cfg.Codex.DisableCodexCloaking
 	uaForced := false
-	if !cloakingDisabled && !isAPIKey && cfgUserAgent == "" && !strings.Contains(r.Header.Get("User-Agent"), "Mac OS") {
+	if !cloakingDisabled && !isAPIKey && cfgUserAgent == "" {
 		r.Header.Set("User-Agent", fallbackUserAgent)
 		uaForced = true
 	}
@@ -527,8 +516,6 @@ func applyCodexHeadersFromSources(r *http.Request, auth *cliproxyauth.Auth, toke
 	} else {
 		r.Header.Set("Accept", "application/json")
 	}
-	r.Header.Set("Connection", "Keep-Alive")
-
 	clientOriginator := strings.TrimSpace(ginHeaders.Get("Originator"))
 	switch {
 	case isAPIKey:
@@ -604,7 +591,7 @@ func isCodexResponsesLiteRequest(body []byte, headers http.Header) bool {
 	if strings.EqualFold(strings.TrimSpace(headers.Get(codexResponsesLiteHeader)), "true") {
 		return true
 	}
-	// Codex Desktop mirrors websocket-only request headers into client_metadata.
+	// Native Codex clients mirror websocket-only request headers into client_metadata.
 	value := gjson.GetBytes(body, codexResponsesLiteMetadata)
 	if !value.Exists() {
 		return false

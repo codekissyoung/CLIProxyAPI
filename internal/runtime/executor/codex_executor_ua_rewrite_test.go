@@ -10,10 +10,9 @@ import (
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 )
 
-// Multi-user Pro account hardening: a non-macOS client UA leaks the presence of
-// teammates running Linux/Windows builds against the same OAuth account. These
-// tests pin the rewrite behavior in applyCodexHeaders /
-// applyCodexWebsocketHeaders so the hardening can't silently regress.
+// Multi-user Pro account hardening converges OAuth traffic on the captured
+// local Codex CLI 0.147.0 identity. These tests pin the rewrite behavior in
+// applyCodexHeaders and applyCodexWebsocketHeaders.
 
 func TestApplyCodexHeadersForcesNonMacOSClientUAToCanonical(t *testing.T) {
 	req, err := http.NewRequest(http.MethodPost, "https://example.com/responses", nil)
@@ -58,14 +57,13 @@ func TestApplyCodexHeadersForcesOriginatorEvenWhenClientSendsConflicting(t *test
 	if got := req.Header.Get("User-Agent"); got != codexUserAgent {
 		t.Fatalf("User-Agent = %s, want canonical %s", got, codexUserAgent)
 	}
-	// UA was forced — originator must follow so the (UA, Originator) pair stays
-	// consistent with what a real macOS codex-tui session sends.
+	// UA was forced, so Originator must follow the captured TUI identity.
 	if got := req.Header.Get("Originator"); got != codexOriginator {
 		t.Fatalf("Originator = %s, want %s (UA was rewritten, must stay in lockstep)", got, codexOriginator)
 	}
 }
 
-func TestApplyCodexHeadersPreservesMacOSClientUA(t *testing.T) {
+func TestApplyCodexHeadersAlsoConvergesMacOSClientUA(t *testing.T) {
 	req, err := http.NewRequest(http.MethodPost, "https://example.com/responses", nil)
 	if err != nil {
 		t.Fatalf("NewRequest() error = %v", err)
@@ -82,11 +80,11 @@ func TestApplyCodexHeadersPreservesMacOSClientUA(t *testing.T) {
 
 	applyCodexHeaders(req, auth, "oauth-token", true, nil)
 
-	if got := req.Header.Get("User-Agent"); got != macUA {
-		t.Fatalf("User-Agent = %s, want untouched %s", got, macUA)
+	if got := req.Header.Get("User-Agent"); got != codexUserAgent {
+		t.Fatalf("User-Agent = %s, want canonical %s", got, codexUserAgent)
 	}
-	if got := req.Header.Get("Originator"); got != "codex-tui" {
-		t.Fatalf("Originator = %s, want codex-tui", got)
+	if got := req.Header.Get("Originator"); got != codexOriginator {
+		t.Fatalf("Originator = %s, want %s", got, codexOriginator)
 	}
 }
 
@@ -163,7 +161,7 @@ func TestApplyCodexWebsocketHeadersForcesNonMacOSClientUAToCanonical(t *testing.
 	}
 }
 
-func TestApplyCodexWebsocketHeadersPreservesMacOSClientUA(t *testing.T) {
+func TestApplyCodexWebsocketHeadersAlsoConvergesMacOSClientUA(t *testing.T) {
 	auth := &cliproxyauth.Auth{
 		Provider: "codex",
 		Metadata: map[string]any{"email": "user@example.com"},
@@ -176,11 +174,11 @@ func TestApplyCodexWebsocketHeadersPreservesMacOSClientUA(t *testing.T) {
 
 	headers := applyCodexWebsocketHeaders(ctx, http.Header{}, auth, "", nil)
 
-	if got := headers.Get("User-Agent"); got != macUA {
-		t.Fatalf("User-Agent = %s, want untouched %s", got, macUA)
+	if got := headers.Get("User-Agent"); got != codexUserAgent {
+		t.Fatalf("User-Agent = %s, want canonical %s", got, codexUserAgent)
 	}
-	if got := headers.Get("Originator"); got != "Codex Desktop" {
-		t.Fatalf("Originator = %s, want Codex Desktop (no UA rewrite means no Originator force)", got)
+	if got := headers.Get("Originator"); got != codexOriginator {
+		t.Fatalf("Originator = %s, want %s", got, codexOriginator)
 	}
 }
 
@@ -200,18 +198,18 @@ func TestApplyCodexWebsocketHeadersRespectsAdminCfgUserAgent(t *testing.T) {
 	}
 }
 
-func TestCanonicalCodexUserAgentContainsMacOS(t *testing.T) {
-	// Sanity: the canonical UA must trip the Mac OS substring used elsewhere
-	// (Session_id gating, this rewrite). If someone changes codexUserAgent to
-	// a value lacking 'Mac OS', the rewrite would loop forever in spirit.
-	if !strings.Contains(codexUserAgent, "Mac OS") {
-		t.Fatalf("codexUserAgent must contain 'Mac OS', got %q", codexUserAgent)
+func TestCanonicalCodexUserAgentMatchesOriginatorAndVersion(t *testing.T) {
+	if !strings.HasPrefix(codexUserAgent, codexOriginator+"/"+codexVersion+" ") {
+		t.Fatalf("codexUserAgent = %q, want %s/%s prefix", codexUserAgent, codexOriginator, codexVersion)
+	}
+	if !strings.Contains(codexUserAgent, "("+codexOriginator+"; "+codexVersion+")") {
+		t.Fatalf("codexUserAgent = %q, want matching originator/version suffix", codexUserAgent)
 	}
 }
 
 // A Codex request must never reach chatgpt.com with Go's default
 // Go-http-client UA. The risk window is an API-key client that sends no UA at
-// all (macOS hardening is skipped for API-key auth), so the safety-net fallback
+// all (OAuth identity forcing is skipped for API-key auth), so the safety-net fallback
 // must pin codexUserAgent on both the REST and websocket paths.
 
 func TestApplyCodexHeadersNeverLeavesEmptyUAForAPIKeyWithoutClientUA(t *testing.T) {

@@ -108,6 +108,28 @@ func TestOrderedRequestConnPreservesChunkedBodyAndReordersNextRequest(t *testing
 	}
 }
 
+func TestOrderedFirstRequestConnPassesWebsocketFramesThrough(t *testing.T) {
+	t.Parallel()
+
+	underlying := &partialErrorConn{}
+	conn := NewOrderedFirstRequestConn(underlying, func(_, _ string) []string {
+		return []string{"Host", "Connection", "Upgrade", "Sec-WebSocket-Key"}
+	})
+	header := []byte("GET /responses HTTP/1.1\r\nSec-WebSocket-Key: placeholder\r\nUpgrade: websocket\r\nHost: chatgpt.com\r\nConnection: Upgrade\r\n\r\n")
+	if written, errWrite := conn.Write(header); errWrite != nil || written != len(header) {
+		t.Fatalf("upgrade header write = %d, %v", written, errWrite)
+	}
+	frame := []byte{0x81, 0x85, 0x01, 0x02, 0x03, 0x04, 0x69, 0x67, 0x6f, 0x68, 0x6e}
+	if written, errWrite := conn.Write(frame); errWrite != nil || written != len(frame) {
+		t.Fatalf("websocket frame write = %d, %v", written, errWrite)
+	}
+	wantHeader := "GET /responses HTTP/1.1\r\nHost: chatgpt.com\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: placeholder\r\n\r\n"
+	want := append([]byte(wantHeader), frame...)
+	if got := underlying.Bytes(); !bytes.Equal(got, want) {
+		t.Fatalf("wire bytes differ\n got: %x\nwant: %x", got, want)
+	}
+}
+
 type partialErrorConn struct {
 	bytes.Buffer
 	failLimit int

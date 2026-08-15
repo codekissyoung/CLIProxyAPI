@@ -992,11 +992,11 @@ func TestApplyCodexWebsocketHeadersDefaultsToCurrentResponsesBeta(t *testing.T) 
 	if got := headers.Get("Originator"); got != codexOriginator {
 		t.Fatalf("Originator = %s, want %s", got, codexOriginator)
 	}
-	if got := headers.Get("Version"); got != "" {
-		t.Fatalf("Version = %q, want empty", got)
+	if got := headers.Get("Version"); got != codexVersion {
+		t.Fatalf("Version = %q, want %q", got, codexVersion)
 	}
-	if got := headers.Get("x-codex-beta-features"); got != "" {
-		t.Fatalf("x-codex-beta-features = %q, want empty", got)
+	if got := headers.Get("x-codex-beta-features"); got != codexBetaFeatures {
+		t.Fatalf("x-codex-beta-features = %q, want %q", got, codexBetaFeatures)
 	}
 	if got := headers.Get("X-Codex-Turn-Metadata"); got != "" {
 		t.Fatalf("X-Codex-Turn-Metadata = %q, want empty", got)
@@ -1007,10 +1007,9 @@ func TestApplyCodexWebsocketHeadersDefaultsToCurrentResponsesBeta(t *testing.T) 
 }
 
 func TestApplyCodexWebsocketHeadersDefaultsToCodexCloaking(t *testing.T) {
-	// Fork semantics: with default cloaking, an OAuth auth without an
-	// admin-configured User-Agent gets its per-account pinned macOS pool UA and
-	// the matching Originator; an admin-configured User-Agent always wins.
-	t.Run("OAuth forces pinned pool UA", func(t *testing.T) {
+	// With default cloaking, an OAuth auth without an admin-configured User-Agent
+	// gets the captured Codex CLI 0.147.0 UA and matching Originator.
+	t.Run("OAuth forces captured CLI UA", func(t *testing.T) {
 		auth := &cliproxyauth.Auth{Provider: "codex"}
 		ctx := contextWithGinHeaders(map[string]string{
 			"User-Agent": "codex-tui/0.144.1 (Ubuntu 26.4.0; x86_64) xterm-256color (codex-tui; 0.144.1)",
@@ -1018,7 +1017,7 @@ func TestApplyCodexWebsocketHeadersDefaultsToCodexCloaking(t *testing.T) {
 		})
 		headers := applyCodexWebsocketHeaders(ctx, http.Header{}, auth, "", nil)
 		if want := codexFallbackUserAgent(auth); headers.Get("User-Agent") != want {
-			t.Fatalf("User-Agent = %q, want pinned pool UA %q", headers.Get("User-Agent"), want)
+			t.Fatalf("User-Agent = %q, want captured CLI UA %q", headers.Get("User-Agent"), want)
 		}
 		if got := headers.Get("Originator"); got != codexOriginator {
 			t.Fatalf("Originator = %q, want %q", got, codexOriginator)
@@ -1045,9 +1044,7 @@ func TestApplyCodexWebsocketHeadersPassesThroughClientIdentityHeadersWhenCloakin
 		Provider: "codex",
 		Metadata: map[string]any{"email": "user@example.com"},
 	}
-	// UA must contain "Mac OS" — the multi-user Pro hardening force-rewrites
-	// any non-macOS client UA back to the canonical macOS one (and along with
-	// it the Originator), so passthrough only applies for macOS clients.
+	// Cloaking is disabled here, so a legacy macOS identity remains passthrough.
 	macClientUA := "codex-tui/0.130.0 (Mac OS 14.6.1; arm64) iTerm.app/3.6.9 (codex-tui; 0.130.0)"
 	ctx := contextWithGinHeaders(map[string]string{
 		"Originator":            "Codex Desktop",
@@ -1583,16 +1580,15 @@ func TestApplyCodexHeadersUsesConfigUserAgentForOAuth(t *testing.T) {
 	if got := req.Header.Get("User-Agent"); got != "config-ua" {
 		t.Fatalf("User-Agent = %s, want %s", got, "config-ua")
 	}
-	if got := req.Header.Get("x-codex-beta-features"); got != "" {
-		t.Fatalf("x-codex-beta-features = %q, want empty", got)
+	if got := req.Header.Get("x-codex-beta-features"); got != codexBetaFeatures {
+		t.Fatalf("x-codex-beta-features = %q, want %q", got, codexBetaFeatures)
 	}
 }
 
 func TestApplyCodexHeadersDefaultsToCodexCloaking(t *testing.T) {
-	// Fork semantics: with default cloaking, an OAuth auth without an
-	// admin-configured User-Agent gets its per-account pinned macOS pool UA and
-	// the matching Originator; an admin-configured User-Agent always wins.
-	t.Run("OAuth forces pinned pool UA", func(t *testing.T) {
+	// With default cloaking, OAuth traffic converges on the captured CLI identity;
+	// an admin-configured User-Agent still wins.
+	t.Run("OAuth forces captured CLI UA", func(t *testing.T) {
 		req, err := http.NewRequest(http.MethodPost, "https://example.com/responses", nil)
 		if err != nil {
 			t.Fatalf("NewRequest() error = %v", err)
@@ -1604,7 +1600,7 @@ func TestApplyCodexHeadersDefaultsToCodexCloaking(t *testing.T) {
 		}
 		applyCodexHeadersFromSources(req, auth, "oauth-token", false, nil, ginHeaders)
 		if want := codexFallbackUserAgent(auth); req.Header.Get("User-Agent") != want {
-			t.Fatalf("User-Agent = %q, want pinned pool UA %q", req.Header.Get("User-Agent"), want)
+			t.Fatalf("User-Agent = %q, want captured CLI UA %q", req.Header.Get("User-Agent"), want)
 		}
 		if got := req.Header.Get("Originator"); got != codexOriginator {
 			t.Fatalf("Originator = %q, want %q", got, codexOriginator)
@@ -1727,7 +1723,7 @@ func TestApplyCodexHeadersPassesThroughClientIdentityHeaders(t *testing.T) {
 	}
 }
 
-func TestApplyCodexHeadersDoesNotInjectClientOnlyHeadersByDefault(t *testing.T) {
+func TestApplyCodexHeadersInjectsCapturedCLI0147Defaults(t *testing.T) {
 	req, err := http.NewRequest(http.MethodPost, "https://example.com/responses", nil)
 	if err != nil {
 		t.Fatalf("NewRequest() error = %v", err)
@@ -1735,8 +1731,11 @@ func TestApplyCodexHeadersDoesNotInjectClientOnlyHeadersByDefault(t *testing.T) 
 
 	applyCodexHeaders(req, nil, "oauth-token", true, nil)
 
-	if got := req.Header.Get("Version"); got != "" {
-		t.Fatalf("Version = %q, want empty", got)
+	if got := req.Header.Get("Version"); got != codexVersion {
+		t.Fatalf("Version = %q, want %q", got, codexVersion)
+	}
+	if got := req.Header.Get("X-Codex-Beta-Features"); got != codexBetaFeatures {
+		t.Fatalf("X-Codex-Beta-Features = %q, want %q", got, codexBetaFeatures)
 	}
 	if got := req.Header.Get("X-Codex-Turn-Metadata"); got != "" {
 		t.Fatalf("X-Codex-Turn-Metadata = %q, want empty", got)
@@ -1768,6 +1767,9 @@ func TestNewProxyAwareWebsocketDialerDirectDisablesProxy(t *testing.T) {
 
 	if dialer.Proxy != nil {
 		t.Fatal("expected websocket proxy function to be nil for direct mode")
+	}
+	if dialer.NetDialContext == nil || dialer.NetDialTLSContext == nil {
+		t.Fatal("expected direct websocket dialer to install Codex CLI plain and TLS dial functions")
 	}
 }
 

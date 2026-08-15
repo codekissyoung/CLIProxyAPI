@@ -27,6 +27,16 @@ func NewOrderedRequestConn(conn net.Conn, order RequestHeaderOrder) net.Conn {
 	return &orderedRequestConn{Conn: conn, order: order}
 }
 
+// NewOrderedFirstRequestConn rewrites only the first HTTP/1.1 request header,
+// then permanently passes every later byte through unchanged. This is intended
+// for protocols such as WebSocket that switch away from HTTP after an Upgrade.
+func NewOrderedFirstRequestConn(conn net.Conn, order RequestHeaderOrder) net.Conn {
+	if conn == nil || order == nil {
+		return conn
+	}
+	return &orderedRequestConn{Conn: conn, order: order, singleRequest: true}
+}
+
 type orderedRequestConn struct {
 	net.Conn
 	order RequestHeaderOrder
@@ -35,11 +45,16 @@ type orderedRequestConn struct {
 	header        []byte
 	bodyRemaining int64
 	chunked       *chunkedRequestTracker
+	singleRequest bool
+	passthrough   bool
 }
 
 func (c *orderedRequestConn) Write(p []byte) (int, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.passthrough {
+		return c.Conn.Write(p)
+	}
 
 	originalLength := len(p)
 	consumed := 0
@@ -103,6 +118,15 @@ func (c *orderedRequestConn) Write(p []byte) (int, error) {
 		}
 		consumed += currentHeaderBytes
 		remaining = body
+		if c.singleRequest {
+			c.passthrough = true
+			if len(remaining) > 0 {
+				if _, errWrite := writeAll(c.Conn, remaining); errWrite != nil {
+					return originalLength, errWrite
+				}
+			}
+			return originalLength, nil
+		}
 		if chunked {
 			c.chunked = newChunkedRequestTracker()
 			continue

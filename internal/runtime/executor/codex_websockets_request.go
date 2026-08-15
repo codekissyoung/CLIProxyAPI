@@ -79,13 +79,21 @@ func applyCodexWebsocketHeaders(ctx context.Context, headers http.Header, auth *
 
 	isAPIKey := codexAuthUsesAPIKey(auth)
 	cfgUserAgent, cfgBetaFeatures := codexHeaderDefaults(cfg, auth)
-	ensureHeaderWithPriority(headers, ginHeaders, "x-codex-beta-features", cfgBetaFeatures, "")
+	if isAPIKey {
+		ensureHeaderWithPriority(headers, ginHeaders, "x-codex-beta-features", "", "")
+	} else {
+		ensureHeaderWithPriority(headers, ginHeaders, "x-codex-beta-features", cfgBetaFeatures, codexBetaFeatures)
+	}
 	misc.EnsureHeader(headers, ginHeaders, "x-codex-turn-state", "")
 	misc.EnsureHeader(headers, ginHeaders, "x-codex-turn-metadata", "")
 	stripCodexTurnMetadataWorkspaces(headers)
 	misc.EnsureHeader(headers, ginHeaders, "x-client-request-id", "")
 	misc.EnsureHeader(headers, ginHeaders, "x-responsesapi-include-timing-metrics", "")
-	misc.EnsureHeader(headers, ginHeaders, "Version", "")
+	if isAPIKey {
+		misc.EnsureHeader(headers, ginHeaders, "Version", "")
+	} else {
+		misc.EnsureHeader(headers, ginHeaders, "Version", codexVersion)
+	}
 	fallbackUserAgent := codexFallbackUserAgent(auth)
 	cloakingDisabled := cfg != nil && cfg.Codex.DisableCodexCloaking
 	uaForced := false
@@ -93,7 +101,7 @@ func applyCodexWebsocketHeaders(ctx context.Context, headers http.Header, auth *
 		ensureHeaderWithPriority(headers, ginHeaders, "User-Agent", "", fallbackUserAgent)
 	} else {
 		ensureHeaderWithConfigPrecedence(headers, ginHeaders, "User-Agent", cfgUserAgent, fallbackUserAgent)
-		if !cloakingDisabled && cfgUserAgent == "" && !strings.Contains(headers.Get("User-Agent"), "Mac OS") {
+		if !cloakingDisabled && cfgUserAgent == "" {
 			headers.Set("User-Agent", fallbackUserAgent)
 			uaForced = true
 		}
