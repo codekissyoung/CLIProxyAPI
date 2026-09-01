@@ -41,8 +41,8 @@ func (e *XAIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth
 	if err != nil {
 		return nil, err
 	}
-	applyXAIChatHeaders(httpReq, auth, token, true, prepared.sessionID)
 	applyXAIGrokCLIClientVersion(httpReq, baseURL, prepared.grokCLIClientVersion)
+	applyXAIChatHeaders(httpReq, auth, token, true, prepared.sessionID, opts.Headers)
 	e.recordXAIRequest(ctx, auth, url, httpReq.Header.Clone(), prepared.body)
 
 	httpClient := helps.NewProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
@@ -86,6 +86,7 @@ func (e *XAIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth
 		outputItemsByIndex := make(map[int64][]byte)
 		var outputItemsFallback [][]byte
 		responseFilter := newXAIInternalXSearchResponseFilter(prepared.filterInternalXSearch, prepared.clientDeclaredTools)
+		namespaceRestorer := newXAINamespaceRestorer(prepared.namespaceTools)
 		var pendingEventLine []byte
 		emitTranslatedLine := func(translatedLine []byte) bool {
 			chunks := helps.TranslateStreamWithClaudeInputTokens(ctx, prepared.to, prepared.responseFormat, req.Model, prepared.originalPayload, prepared.body, translatedLine, &param, claudeInputTokens)
@@ -115,7 +116,7 @@ func (e *XAIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth
 				hasPendingEventLine := pendingEventLine != nil
 				for i, eventData := range eventDataList {
 					if !prepared.nativeGrokCLI {
-						eventData = restoreXAINamespaceToolCalls(eventData, prepared.namespaceTools)
+						eventData = namespaceRestorer.restore(eventData)
 						eventData = responseFilter.apply(eventData)
 					}
 					if len(eventData) == 0 {
@@ -128,14 +129,18 @@ func (e *XAIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth
 					switch normalizedEventName {
 					case "response.output_item.done":
 						xaiCollectOutputItemDone(eventData, outputItemsByIndex, &outputItemsFallback)
-					case "response.completed":
+					case "response.completed", "response.incomplete":
 						if detail, ok := helps.ParseCodexUsage(eventData); ok {
 							reporter.Publish(ctx, detail)
 						}
 						eventData = xaiPatchCompletedOutput(eventData, outputItemsByIndex, outputItemsFallback)
 						if !prepared.nativeGrokCLI {
 							eventData = xaiNormalizeReasoningSummaryData(eventData)
-							cacheXAIReasoningReplayFromCompleted(ctx, prepared.replayScope, eventData)
+							if normalizedEventName == "response.completed" {
+								// A truncated turn carries no replayable terminal state, so only a
+								// completed response may refresh the reasoning replay cache.
+								cacheXAIReasoningReplayFromCompleted(ctx, prepared.replayScope, eventData)
+							}
 						}
 						normalizedEventName = gjson.GetBytes(eventData, "type").String()
 					}

@@ -542,6 +542,9 @@ func isAuthBlockedForModel(auth *Auth, model string, now time.Time) (bool, block
 	if auth.Disabled || auth.Status == StatusDisabled {
 		return true, blockReasonDisabled, time.Time{}
 	}
+	if auth.Quota.Exceeded && auth.Quota.Reason == "credential_quota" && auth.Quota.NextRecoverAt.After(now) {
+		return true, blockReasonCooldown, auth.Quota.NextRecoverAt
+	}
 	if model != "" {
 		if len(auth.ModelStates) > 0 {
 			modelKey := canonicalModelKey(model)
@@ -711,10 +714,10 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 
 	bindHome := func(authID string) {
 		if homeAliasKey != "" {
-			s.cache.SetAliases(authID, homeKey, homeAliasKey)
+			s.cache.SetAliases(authID, homeKey, modelKey, homeAliasKey, modelAliasKey)
 			return
 		}
-		s.cache.Set(homeKey, authID)
+		s.cache.SetAliases(authID, homeKey, modelKey)
 	}
 	bindFallback := func(authID string) {
 		if modelAliasKey != "" {
@@ -819,6 +822,57 @@ func (s *SessionAffinitySelector) InvalidateAuth(authID string) {
 	}
 	if s.fallbackCache != nil {
 		s.fallbackCache.InvalidateAuth(authID)
+	}
+}
+
+// OnResult refreshes successful session bindings and releases failed bindings.
+func (s *SessionAffinitySelector) OnResult(res Result) {
+	if s == nil || s.cache == nil || res.AuthID == "" {
+		return
+	}
+	primaryID, fallbackID := extractSessionIDs(res.Options.Headers, res.Options.OriginalRequest, res.Options.Metadata)
+	if primaryID == "" && fallbackID == "" {
+		return
+	}
+	ns := res.Provider
+	if raw, ok := res.Options.Metadata[cliproxyexecutor.SessionAffinityProviderMetadataKey].(string); ok && raw != "" {
+		ns = raw
+	}
+	nsModel := canonicalModelKey(res.Model)
+	if raw, ok := res.Options.Metadata[cliproxyexecutor.SessionAffinityModelMetadataKey].(string); ok && raw != "" {
+		nsModel = canonicalModelKey(raw)
+	}
+	cacheKey := ns + "::" + primaryID + "::" + nsModel
+	homeKey := ns + "::" + primaryID
+	var homeAliasKey string
+	if fallbackID != "" && fallbackID != primaryID {
+		homeAliasKey = ns + "::" + fallbackID
+	}
+	var fallbackKey string
+	if fallbackID != "" && fallbackID != primaryID {
+		fallbackKey = ns + "::" + fallbackID + "::" + nsModel
+	}
+	if res.Success {
+		s.cache.Touch(homeKey, res.AuthID)
+		if homeAliasKey != "" {
+			s.cache.Touch(homeAliasKey, res.AuthID)
+		}
+		s.cache.Touch(cacheKey, res.AuthID)
+		if fallbackKey != "" {
+			s.cache.Touch(fallbackKey, res.AuthID)
+		}
+		return
+	}
+	if res.Error != nil && shouldSkipCredentialCooldown(res.Error) {
+		return
+	}
+	s.cache.CompareAndDelete(homeKey, res.AuthID)
+	if homeAliasKey != "" {
+		s.cache.CompareAndDelete(homeAliasKey, res.AuthID)
+	}
+	s.cache.CompareAndDelete(cacheKey, res.AuthID)
+	if fallbackKey != "" {
+		s.cache.CompareAndDelete(fallbackKey, res.AuthID)
 	}
 }
 
