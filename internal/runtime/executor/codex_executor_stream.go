@@ -156,6 +156,18 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	var outputItemsFallback [][]byte
 	outputItemsRetained := 0
 	outputItemsDropped := false
+	collectOutputItem := func(data []byte) {
+		if outputItemsDropped {
+			return
+		}
+		outputItemsRetained += collectCodexOutputItemDone(data, outputItemsByIndex, &outputItemsFallback)
+		if outputItemsRetained > codexOutputItemsRetainLimit {
+			outputItemsByIndex = make(map[int64][]byte)
+			outputItemsFallback = nil
+			outputItemsDropped = true
+			log.Debugf("codex executor: retained output items exceeded %d bytes, skipping response.completed output patch", codexOutputItemsRetainLimit)
+		}
+	}
 
 	var bufferedChunks [][]byte
 	var initialChunks [][]byte
@@ -213,7 +225,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 				}
 				switch eventType {
 				case "response.output_item.done":
-					collectCodexOutputItemDone(data, outputItemsByIndex, &outputItemsFallback)
+					collectOutputItem(data)
 				case "response.completed", "response.incomplete":
 					terminalSuccess = true
 					if detail, ok := helps.ParseCodexUsage(data); ok {
@@ -334,15 +346,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 				}
 				switch eventType {
 				case "response.output_item.done":
-					if !outputItemsDropped {
-						outputItemsRetained += collectCodexOutputItemDone(data, outputItemsByIndex, &outputItemsFallback)
-						if outputItemsRetained > codexOutputItemsRetainLimit {
-							outputItemsByIndex = make(map[int64][]byte)
-							outputItemsFallback = nil
-							outputItemsDropped = true
-							log.Debugf("codex executor: retained output items exceeded %d bytes, skipping response.completed output patch", codexOutputItemsRetainLimit)
-						}
-					}
+					collectOutputItem(data)
 				case "response.completed", "response.incomplete":
 					terminalSuccess = true
 					if detail, ok := helps.ParseCodexUsage(data); ok {

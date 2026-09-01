@@ -113,11 +113,6 @@ func SanitizeCodexResponsesRequest(rawJSON []byte) []byte {
 		}
 		log.WithFields(fields).Warn("codex request sanitized: unsupported client parameters stripped before forwarding")
 	}
-
-	// Convert role "system" to "developer" in input array to comply with Codex API requirements.
-	rawJSON = convertSystemRoleToDeveloper(rawJSON)
-	rawJSON = normalizeCodexBuiltinTools(rawJSON)
-
 	return rawJSON
 }
 

@@ -292,12 +292,15 @@ func mergeSessionAliases(existing []string, candidates ...string) []string {
 
 // Touch refreshes the expiration for a session binding if it currently matches expectedAuthID.
 func (c *SessionCache) Touch(sessionID, expectedAuthID string) bool {
-	if sessionID == "" || expectedAuthID == "" {
+	if c == nil || sessionID == "" || expectedAuthID == "" {
 		return false
 	}
 	now := time.Now()
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.stopped {
+		return false
+	}
 	entry, ok := c.entries[sessionID]
 	if !ok || entry.authID != expectedAuthID || !now.Before(entry.expiresAt) {
 		return false
@@ -307,16 +310,22 @@ func (c *SessionCache) Touch(sessionID, expectedAuthID string) bool {
 	return true
 }
 
-// CompareAndDelete removes the session binding only if it is currently bound to expectedAuthID.
+// CompareAndDelete removes a session binding only when it still matches expectedAuthID.
 func (c *SessionCache) CompareAndDelete(sessionID, expectedAuthID string) bool {
-	if sessionID == "" || expectedAuthID == "" {
+	if c == nil || sessionID == "" || expectedAuthID == "" {
 		return false
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.stopped {
+		return false
+	}
 	entry, ok := c.entries[sessionID]
 	if !ok || entry.authID != expectedAuthID {
 		return false
+	}
+	if len(entry.aliases) <= 1 {
+		return c.removeAliasGroupLocked(entry)
 	}
 	delete(c.entries, sessionID)
 	for _, alias := range entry.aliases {

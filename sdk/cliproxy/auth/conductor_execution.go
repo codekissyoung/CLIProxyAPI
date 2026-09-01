@@ -65,6 +65,9 @@ func (m *Manager) Execute(ctx context.Context, providers []string, req cliproxye
 		if isRequestTerminatedError(errExec) || isRequestStopError(errExec) {
 			return cliproxyexecutor.Response{}, unwrapRequestStopError(errExec)
 		}
+		if xaiOAuthConcurrencyBusy(errExec) {
+			return cliproxyexecutor.Response{}, errExec
+		}
 		lastErr = errExec
 		wait, shouldRetry := m.shouldRetryAfterErrorWithHomeRetryLimit(ctx, opts, errExec, attempt, normalized, retryModel, maxWait, -1, defaultRequestRetry)
 		if !shouldRetry {
@@ -111,6 +114,9 @@ func (m *Manager) ExecuteCount(ctx context.Context, providers []string, req clip
 		}
 		if isRequestTerminatedError(errExec) || isRequestStopError(errExec) {
 			return cliproxyexecutor.Response{}, unwrapRequestStopError(errExec)
+		}
+		if xaiOAuthConcurrencyBusy(errExec) {
+			return cliproxyexecutor.Response{}, errExec
 		}
 		lastErr = errExec
 		wait, shouldRetry := m.shouldRetryAfterErrorWithHomeRetryLimit(ctx, opts, errExec, attempt, normalized, retryModel, maxWait, -1, defaultRequestRetry)
@@ -170,6 +176,9 @@ func (m *Manager) ExecuteStream(ctx context.Context, providers []string, req cli
 		retryRoundWaited = false
 		if isRequestTerminatedError(errStream) || isRequestStopError(errStream) {
 			return nil, unwrapRequestStopError(errStream)
+		}
+		if xaiOAuthConcurrencyBusy(errStream) {
+			return nil, errStream
 		}
 		lastErr = errStream
 		wait, shouldRetry := m.shouldRetryAfterErrorWithHomeRetryLimit(ctx, opts, errStream, attempt, normalized, retryModel, maxWait, homeRetryLimit, defaultRequestRetry)
@@ -367,19 +376,23 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 
 		models, pooled, aliasResult, routing := m.preparedExecutionModelsWithAlias(auth, routeModel)
 		if len(models) == 0 {
-			releaseConcurrency()
+			if !homeMode {
+				releaseConcurrency()
+			}
 			continue
 		}
 		attempted[auth.ID] = struct{}{}
 		var errPrepare error
 		auth, errPrepare = m.prepareRequestAuth(execCtx, executor, auth)
 		if errPrepare != nil {
+			if !homeMode {
+				releaseConcurrency()
+			}
 			if errCancel := claudeOAuthRequestCancellation(execCtx, auth, errPrepare); errCancel != nil {
 				return cliproxyexecutor.Response{}, errCancel
 			}
 			result := Result{AuthID: auth.ID, Provider: provider, Model: routeModel, Success: false, Error: resultErrorFromError(errPrepare), Options: pickOpts}
 			m.MarkResult(execCtx, result)
-			releaseConcurrency()
 			lastErr = errPrepare
 			continue
 		}
@@ -431,6 +444,7 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 				}
 			}
 			if errCancel := claudeOAuthRequestCancellation(execCtx, auth, errExec); errCancel != nil {
+				releaseConcurrency()
 				return cliproxyexecutor.Response{}, errCancel
 			}
 			result := Result{AuthID: auth.ID, Provider: provider, Model: resultModel, Success: errExec == nil, Options: execOpts}
@@ -571,12 +585,12 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 		var errPrepare error
 		auth, errPrepare = m.prepareRequestAuth(execCtx, executor, auth)
 		if errPrepare != nil {
+			releaseConcurrency()
 			if errCancel := claudeOAuthRequestCancellation(execCtx, auth, errPrepare); errCancel != nil {
 				return cliproxyexecutor.Response{}, errCancel
 			}
 			result := Result{AuthID: auth.ID, Provider: provider, Model: routeModel, Success: false, Error: resultErrorFromError(errPrepare), Options: pickOpts, SkipQuotaObservation: true}
 			m.MarkResult(execCtx, result)
-			releaseConcurrency()
 			lastErr = errPrepare
 			continue
 		}
@@ -628,6 +642,7 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 				}
 			}
 			if errCancel := claudeOAuthRequestCancellation(execCtx, auth, errExec); errCancel != nil {
+				releaseConcurrency()
 				return cliproxyexecutor.Response{}, errCancel
 			}
 			result := Result{AuthID: auth.ID, Provider: provider, Model: resultModel, Success: errExec == nil, Options: execOpts, SkipQuotaObservation: true}
@@ -783,6 +798,16 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 			}
 			return nil, &Error{Code: "executor_not_found", Message: "executor not registered"}
 		}
+		releaseConcurrency := func() {}
+		if !homeMode {
+			var acquiredConcurrency bool
+			releaseConcurrency, acquiredConcurrency = m.acquireXAIOAuthConcurrency(auth)
+			if !acquiredConcurrency {
+				tried[auth.ID] = struct{}{}
+				concurrencyBusy = true
+				continue
+			}
+		}
 		if homeMode {
 			m.observeHomeRetryLimit(auth, selection, homeRetryLimit)
 		}
@@ -797,16 +822,6 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 		}
 		if homeMode && lastHomeAuthID != "" && auth.ID != lastHomeAuthID {
 			homeSameAuthRetryPending = false
-		}
-		releaseConcurrency := func() {}
-		if !homeMode {
-			var acquiredConcurrency bool
-			releaseConcurrency, acquiredConcurrency = m.acquireXAIOAuthConcurrency(auth)
-			if !acquiredConcurrency {
-				tried[auth.ID] = struct{}{}
-				concurrencyBusy = true
-				continue
-			}
 		}
 		if selection != nil {
 			// A legacy Home may ignore excluded_auth_ids and return the same
@@ -850,7 +865,6 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 		debugLogAuthSelection(entry, auth, provider, routeModel)
 		if selection != nil {
 			if errRuntimeAuth := m.bindHomeSelectionRuntimeAuth(ctx, opts, selection); errRuntimeAuth != nil {
-				releaseConcurrency()
 				selection.End("runtime_auth_bind_failed")
 				return nil, errRuntimeAuth
 			}
@@ -864,7 +878,6 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 			var errBind error
 			execCtx, releaseAttempt, errBind = homeExecutionAttemptContext(ctx, selection)
 			if errBind != nil {
-				releaseConcurrency()
 				selection.End("attempt_bind_failed")
 				return nil, errBind
 			}
@@ -881,7 +894,6 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 			aliasResult.OriginalAlias = responseAlias
 		}
 		if len(models) == 0 {
-			releaseConcurrency()
 			if selection != nil {
 				homeExcludedAuthIDs[auth.ID] = struct{}{}
 				lastHomeAuthID = auth.ID
@@ -890,6 +902,9 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 				if errEnd := m.endHomeSelectionBeforeRedispatch(ctx, selection, "no_execution_models"); errEnd != nil {
 					return nil, errEnd
 				}
+			}
+			if !homeMode {
+				releaseConcurrency()
 			}
 			continue
 		}
@@ -901,6 +916,9 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 			auth, errPrepare = m.prepareRequestAuth(execCtx, executor, auth)
 		}
 		if errPrepare != nil {
+			if !homeMode {
+				releaseConcurrency()
+			}
 			if selection != nil {
 				excludeAuth := shouldExcludeHomeAuthAfterStreamError(execCtx, auth, errPrepare)
 				if _, refreshedAlready := unauthorizedRefreshTried[auth.ID]; refreshedAlready || homeSameAuthRetries[auth.ID] > 0 {
@@ -924,7 +942,6 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 			} else {
 				m.MarkResult(execCtx, result)
 			}
-			releaseConcurrency()
 			lastErr = errPrepare
 			if homeMode {
 				roundTiming.Observe(lastErr)
@@ -951,7 +968,9 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 		}
 		streamResult, errStream := m.executeStreamWithModelPool(execCtx, executor, auth, provider, execReq, execOpts, routeModel, streamExecutionModel, models, pooled, aliasResult, routing, !homeMode || selection != nil, selection != nil, unauthorizedRefreshTried)
 		if errStream != nil {
-			releaseConcurrency()
+			if !homeMode {
+				releaseConcurrency()
+			}
 			if selection != nil {
 				excludeAuth := shouldExcludeHomeAuthAfterStreamError(execCtx, auth, errStream)
 				if _, refreshedAlready := unauthorizedRefreshTried[auth.ID]; refreshedAlready || homeSameAuthRetries[auth.ID] > 0 {
@@ -1004,7 +1023,10 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 			}
 			return wrapHomeStream(ctx, streamResult, selection, releaseAttempt), nil
 		}
-		return wrapStreamConcurrencyRelease(ctx, streamResult, releaseConcurrency), nil
+		if !homeMode {
+			return wrapStreamConcurrencyRelease(ctx, streamResult, releaseConcurrency), nil
+		}
+		return streamResult, nil
 	}
 }
 
@@ -1021,20 +1043,20 @@ func wrapStreamConcurrencyRelease(ctx context.Context, result *cliproxyexecutor.
 		if release != nil {
 			defer release()
 		}
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case chunk, ok := <-result.Chunks:
-				if !ok {
-					return
-				}
-				select {
-				case <-ctx.Done():
-					return
-				case out <- chunk:
-				}
+		forward := true
+		for chunk := range result.Chunks {
+			if !forward {
+				continue
 			}
+			if ctx != nil {
+				select {
+				case out <- chunk:
+				case <-ctx.Done():
+					forward = false
+				}
+				continue
+			}
+			out <- chunk
 		}
 	}()
 	return &cliproxyexecutor.StreamResult{Headers: result.Headers, Chunks: out}

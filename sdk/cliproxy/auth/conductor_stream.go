@@ -120,6 +120,12 @@ func (m *Manager) wrapStreamResult(ctx context.Context, auth *Auth, provider, re
 	go func() {
 		defer close(out)
 		var failed bool
+		defer func() {
+			if !failed && ctx != nil && ctx.Err() != nil && strings.EqualFold(strings.TrimSpace(provider), "claude") {
+				failed = true
+				m.recordExecutionResult(ctx, Result{AuthID: auth.ID, Provider: provider, Model: resultModel, Success: false, Error: NewRequestScopedError(context.Canceled.Error(), 0), Options: opts}, auth, ephemeralResult)
+			}
+		}()
 		forward := true
 		var rewriter *StreamRewriter
 		if aliasResult.ForceMapping && strings.TrimSpace(aliasResult.OriginalAlias) != "" {
@@ -166,6 +172,10 @@ func (m *Manager) wrapStreamResult(ctx context.Context, auth *Auth, provider, re
 			}
 			select {
 			case <-ctx.Done():
+				if !failed && strings.EqualFold(strings.TrimSpace(provider), "claude") {
+					failed = true
+					m.recordExecutionResult(ctx, Result{AuthID: auth.ID, Provider: provider, Model: resultModel, Success: false, Error: NewRequestScopedError(context.Canceled.Error(), 0), Options: opts}, auth, ephemeralResult)
+				}
 				forward = false
 				return false
 			case out <- chunk:

@@ -280,15 +280,12 @@ func (m *Manager) SetSelector(selector Selector) {
 	}
 }
 
-// SetProviderStrategies updates the per-provider strategy overrides without
-// changing the global selector. A nil or empty map clears all overrides.
+// SetProviderStrategies updates the per-provider strategy overrides without changing the global selector.
 func (m *Manager) SetProviderStrategies(strategies map[string]string) {
-	if m == nil {
+	if m == nil || m.scheduler == nil {
 		return
 	}
-	if m.scheduler != nil {
-		m.scheduler.setProviderStrategies(strategies)
-	}
+	m.scheduler.setProviderStrategies(strategies)
 }
 
 // Selector returns the current credential selector.
