@@ -19,6 +19,8 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/thinking"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
+	log "github.com/sirupsen/logrus"
+	"github.com/tidwall/gjson"
 )
 
 var quotaCooldownDisabled atomic.Bool
@@ -1327,6 +1329,9 @@ func resultErrorFromError(err error) *Error {
 	if resultErr.HTTPStatus == 0 {
 		resultErr.HTTPStatus = statusCodeFromError(err)
 	}
+	if isContentPolicyRefusalError(err) {
+		logContentPolicyRefusal(err)
+	}
 	switch {
 	case isRequestScopedError(err) || isRequestInvalidError(err):
 		// Prefer true request-scoped faults (including Claude OAuth cancellation)
@@ -1864,9 +1869,144 @@ func isMissingModelPhrase(value string) bool {
 	}
 }
 
+// contentPolicyRefusalMarkers are the upstream moderation/safety rejection
+// identifiers, kept aligned with the relay-side content policy gate
+// (claude-relay-server ai-relay/internal/proxy/error_sanitizer.go). A refusal
+// carrying one of these markers is a property of the request content, not of
+// the credential: fanning it out would replay the same violating payload
+// against every pooled account, and cooling the account would be a false
+// health signal. cyber_policy is the one shape actually observed from the
+// Codex backend ({"type":"error","error":{"type":"invalid_request",
+// "code":"cyber_policy"}}); the rest mirror the relay allowlist so gateway
+// translations of the same refusal stop fan-out too.
+var contentPolicyRefusalMarkers = map[string]struct{}{
+	"cyber_policy":                    {},
+	"sensitive_words_detected":        {},
+	"content_policy_violation":        {},
+	"moderation_blocked":              {},
+	"safety_violation":                {},
+	"session_blocked_by_cyber_policy": {},
+}
+
+func isContentPolicyRefusalMarker(value string) bool {
+	_, ok := contentPolicyRefusalMarkers[strings.ToLower(strings.TrimSpace(value))]
+	return ok
+}
+
+// isContentPolicyRefusalError reports whether err is an upstream
+// moderation/safety refusal. Matching is body-based rather than status-based
+// because the same cyber_policy rejection was observed as 400 on the SSE
+// error path and as 502 through the websocket disconnect channel (fork
+// fe28d582). Credential/quota-authoritative statuses (401/402/429) are never
+// reclassified: an auth or billing failure must keep its cooldown semantics
+// even if the body happens to quote a marker. Errors without an HTTP status
+// are excluded so transport failures cannot masquerade as content refusals.
+func isContentPolicyRefusalError(err error) bool {
+	if err == nil {
+		return false
+	}
+	switch status := statusCodeFromError(err); {
+	case status < 400:
+		return false
+	case status == http.StatusUnauthorized, status == http.StatusPaymentRequired, status == http.StatusTooManyRequests:
+		return false
+	}
+	var authErr *Error
+	if errors.As(err, &authErr) && authErr != nil && isContentPolicyRefusalMarker(authErr.Code) {
+		return true
+	}
+	body := strings.TrimSpace(err.Error())
+	if body == "" {
+		return false
+	}
+	if json.Valid([]byte(body)) {
+		for _, path := range []string{
+			"error.code", "error.type", "error.message",
+			"code", "type", "message",
+			"response.error.code", "response.error.type", "response.error.message",
+			"body.error.code", "body.error.type", "body.error.message",
+			"detail", "detail.code", "detail.type", "detail.message",
+		} {
+			if isContentPolicyRefusalMarker(gjson.Get(body, path).String()) {
+				return true
+			}
+		}
+	}
+	// Fallback for non-JSON bodies or marker placements the paths above miss:
+	// match only the quoted marker form so prose mentioning moderation cannot
+	// reclassify an unrelated failure.
+	lower := strings.ToLower(body)
+	for marker := range contentPolicyRefusalMarkers {
+		if strings.Contains(lower, `"`+marker+`"`) {
+			return true
+		}
+	}
+	return false
+}
+
+// logContentPolicyRefusal emits one sanitized warn line for a moderation-class
+// refusal. Only the upstream status and the enum-like error code/type are
+// logged — never the message/body, which may echo the rejected request
+// content. Called from resultErrorFromError, the single funnel every failed
+// attempt passes through before MarkResult, and content-policy refusals stop
+// fan-out, so one refusal produces one line.
+func logContentPolicyRefusal(err error) {
+	code, errType := contentPolicyRefusalIdentifiers(err)
+	log.WithFields(log.Fields{
+		"http_status": statusCodeFromError(err),
+		"error_code":  code,
+		"error_type":  errType,
+	}).Warn("content policy refusal classified as request-invalid; credential rotation and cooldown skipped")
+}
+
+// contentPolicyRefusalIdentifiers extracts the upstream error code/type for
+// logging. Values are truncated defensively; the message/body is never read.
+func contentPolicyRefusalIdentifiers(err error) (code, errType string) {
+	var authErr *Error
+	if errors.As(err, &authErr) && authErr != nil {
+		code = authErr.Code
+	}
+	body := strings.TrimSpace(err.Error())
+	if json.Valid([]byte(body)) {
+		for _, path := range []string{"error.code", "code", "response.error.code", "body.error.code", "detail.code"} {
+			if value := strings.TrimSpace(gjson.Get(body, path).String()); value != "" {
+				code = value
+				break
+			}
+		}
+		for _, path := range []string{"error.type", "type", "response.error.type", "body.error.type", "detail.type"} {
+			if value := strings.TrimSpace(gjson.Get(body, path).String()); value != "" {
+				errType = value
+				break
+			}
+		}
+	}
+	if code == "" {
+		// Non-JSON body: report the matched quoted marker so the warn line
+		// still identifies which policy fired.
+		lower := strings.ToLower(body)
+		for marker := range contentPolicyRefusalMarkers {
+			if strings.Contains(lower, `"`+marker+`"`) {
+				code = marker
+				break
+			}
+		}
+	}
+	const maxIdentifierLength = 128
+	if len(code) > maxIdentifierLength {
+		code = code[:maxIdentifierLength]
+	}
+	if len(errType) > maxIdentifierLength {
+		errType = errType[:maxIdentifierLength]
+	}
+	return code, errType
+}
+
 // isRequestInvalidError returns true if the error represents a client request
 // error that should neither rotate nor penalize credentials. Model-support
 // errors remain eligible for alternate routing and keep their model-level state.
+// Content-policy refusals are included: retrying the same violating payload on
+// another account amplifies one rejection into a pool-wide risk signal.
 func isRequestInvalidError(err error) bool {
 	if err == nil {
 		return false
@@ -1882,6 +2022,9 @@ func isRequestInvalidError(err error) bool {
 	}
 	if isModelSupportError(err) {
 		return false
+	}
+	if isContentPolicyRefusalError(err) {
+		return true
 	}
 	status := statusCodeFromError(err)
 	if clienterror.IsRequestFault(status, err) {

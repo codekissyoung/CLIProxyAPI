@@ -718,6 +718,14 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 	opts.Metadata[cliproxyexecutor.SessionAffinityProviderMetadataKey] = provider
 	opts.Metadata[cliproxyexecutor.SessionAffinityModelMetadataKey] = model
 	primaryID, fallbackID := extractSessionIDs(opts.Headers, opts.OriginalRequest, opts.Metadata)
+	defer func() {
+		// Every successful pick exposes the chosen account to this logical
+		// session, regardless of which branch (home hit, temporary fallback,
+		// cold bind) produced it — record the pair for the daily spread gauge.
+		if err == nil && auth != nil && primaryID != "" {
+			metrics.ObserveAccountDailySession(auth.ID, primaryID)
+		}
+	}()
 	entry.Debugf("session-affinity: parsed session | provider=%s model=%s primary=%q fallback=%q", provider, model, primaryID, fallbackID)
 
 	now := time.Now()
