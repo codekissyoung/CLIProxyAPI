@@ -62,6 +62,7 @@ go build -o test-output ./cmd/server && rm test-output # Verify compile (REQUIRE
 - Avoid panics in HTTP handlers; prefer logged errors and meaningful HTTP status codes
 - Timeouts are allowed only during credential acquisition; after an upstream connection is established, do not set timeouts for any subsequent network behavior. Intentional exceptions that must remain allowed are the Codex websocket liveness deadlines in `internal/runtime/executor/codex_websockets_executor.go`, the wsrelay session deadlines in `internal/wsrelay/session.go`, the management APICall timeout in `internal/api/handlers/management/api_tools.go`, and the `cmd/fetch_antigravity_models` utility timeouts
 - For SSE scanners on streaming bodies, follow the project convention `scanner.Buffer(nil, 52_428_800)`; let bufio's lazy 4KB → 2× growth handle buffer sizing. Don't pre-allocate large initial buffers — every other executor (qwen / openai_compat / claude / iflow / gemini) follows this form.
+- Avoid wall-clock `time.Sleep` in TTL, expiration, ordering, or cache-eviction unit tests due to platform timer granularity (e.g. Windows default timer resolution of ~15.6ms) and CI jitter under load; prefer controllable clocks (`nowFunc` / mock clock), explicit timestamp manipulation, or deterministic synchronization primitives.
 
 ## Upstream Merge Policy
 - When merging upstream `main` into `ice`, prefer upstream semantics over locally divergent patches; keep a local divergence only with documented production evidence (the Home/temp session-affinity model is such a deliberate divergence).

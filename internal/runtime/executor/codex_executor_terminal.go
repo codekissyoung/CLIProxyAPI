@@ -510,6 +510,11 @@ func isCodexHandshakeMetadataEvent(eventType string) bool {
 	}
 }
 
+// observeCodexTokenEvent inspects a stream payload and marks TTFT on the first substantive token event.
+func observeCodexTokenEvent(reporter *helps.UsageReporter, payload []byte) {
+	helps.ObserveResponsesTokenEvent(reporter, payload)
+}
+
 // newCodexBootstrapOverloadErr reports a buffered overload rejection with its real status.
 //
 // The status is deliberately produced here instead of in codexTerminalFailureStatus: that mapping
