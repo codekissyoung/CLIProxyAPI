@@ -1,17 +1,24 @@
-# 多人共用 Pro 账号：Codex CLI 0.147.0 上游身份收敛
+# 多人共用 Pro 账号：Codex CLI 0.153.4 上游身份收敛
 
 ## 目标
 
 `ice` 分支把同一 OAuth 账号的上游请求收敛为一台 Ubuntu x86_64 主机上的
-Codex CLI 0.147.0 TUI，而不是暴露各下游客户端的系统、版本和传输栈差异。
+Codex CLI 0.153.4 TUI，而不是暴露各下游客户端的系统、版本和传输栈差异。
 这只改变上游可见身份，不改变账号选择、会话黏性、计费或响应翻译。
 
 当前固定应用身份为：
 
-- `User-Agent: codex-tui/0.147.0 (Ubuntu 24.4.0; x86_64) dumb (codex-tui; 0.147.0)`
+- `User-Agent: codex-tui/0.153.4 (Ubuntu 24.4.0; x86_64) dumb (codex-tui; 0.153.4)`
 - `Originator: codex-tui`
-- 缺失时补 `Version: 0.147.0`
+- 缺失时补 `Version: 0.153.4`
 - 缺失时补 `X-Codex-Beta-Features: remote_compaction_v2`
+
+> 2026-09-05：应用层身份从 0.147.0 升到 0.153.4。OpenAI 后端对
+> `gpt-6-astra` 按上游自报版本硬 400（"requires a newer version of Codex"），
+> 0.147.0 身份全部命中；sub2api 同步官方最新稳定版（GitHub `openai/codex`
+> release）可正常服务，证明门槛在应用层版本字串。TLS ClientHello 沿用
+> 0.147.0 捕获基线未换——reqwest/OpenSSL 与 rustls 栈在 0.147→0.153
+> 之间无变化，且该门控与 TLS 指纹无关。
 
 OAuth 请求默认强制使用这一组身份；管理员显式设置
 `codex-header-defaults.user-agent` 或开启 `disable-codex-cloaking` 时仍按配置处理。

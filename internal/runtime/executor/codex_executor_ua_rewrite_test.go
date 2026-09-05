@@ -11,7 +11,7 @@ import (
 )
 
 // Multi-user Pro account hardening converges OAuth traffic on the captured
-// local Codex CLI 0.147.0 identity. These tests pin the rewrite behavior in
+// local Codex CLI 0.153.4 identity. These tests pin the rewrite behavior in
 // applyCodexHeaders and applyCodexWebsocketHeaders.
 
 func TestApplyCodexHeadersForcesNonMacOSClientUAToCanonical(t *testing.T) {

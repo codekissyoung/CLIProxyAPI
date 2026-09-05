@@ -328,9 +328,9 @@ wss://chatgpt.com/backend-api/codex/responses
 - `Authorization: Bearer <access_token>`
 - `Content-Type: application/json`
 - `Accept: text/event-stream` 或 `application/json`
-- `User-Agent: codex-tui/0.147.0 (Ubuntu 24.4.0; x86_64) dumb (codex-tui; 0.147.0)`
+- `User-Agent: codex-tui/0.153.4 (Ubuntu 24.4.0; x86_64) dumb (codex-tui; 0.153.4)`
 - `Originator: codex-tui`
-- `Version: 0.147.0`
+- `Version: 0.153.4`
 - `Chatgpt-Account-Id: <account_id>`
 - `Session_id: <uuid>`
 

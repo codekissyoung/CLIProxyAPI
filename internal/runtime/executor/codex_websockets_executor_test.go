@@ -1111,7 +1111,7 @@ func TestApplyCodexWebsocketHeadersDefaultsToCurrentResponsesBeta(t *testing.T) 
 
 func TestApplyCodexWebsocketHeadersDefaultsToCodexCloaking(t *testing.T) {
 	// With default cloaking, an OAuth auth without an admin-configured User-Agent
-	// gets the captured Codex CLI 0.147.0 UA and matching Originator.
+	// gets the captured Codex CLI 0.153.4 UA and matching Originator.
 	t.Run("OAuth forces captured CLI UA", func(t *testing.T) {
 		auth := &cliproxyauth.Auth{Provider: "codex"}
 		ctx := contextWithGinHeaders(map[string]string{
