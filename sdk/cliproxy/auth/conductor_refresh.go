@@ -502,6 +502,8 @@ func (m *Manager) refreshAuthForRequest(ctx context.Context, id, failedAccessTok
 			}
 			current.Generation++
 			current.UpdatedAt = now
+			// ice divergence: transition-based revocation counting is local-only;
+			// upstream owns the hasValidAccessToken retention path. Keep both.
 			// A revoked credential keeps failing refresh until the pool stops
 			// scheduling it; count the ban only on the transition into the
 			// unauthorized state. Under access-token retention the credential is

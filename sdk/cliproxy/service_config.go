@@ -33,7 +33,8 @@ type routingRuntimeState struct {
 
 func normalizedRoutingRuntimeState(cfg *config.Config) routingRuntimeState {
 	state := routingRuntimeState{
-		strategy:                 "round-robin",
+		strategy: "round-robin",
+		// ice divergence: 24h home-affinity TTL; upstream's example config uses 1h.
 		sessionAffinityTTL:       24 * time.Hour,
 		sessionAffinitySubagents: true,
 	}

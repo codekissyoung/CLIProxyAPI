@@ -66,10 +66,11 @@ go build -o test-output ./cmd/server && rm test-output # Verify compile (REQUIRE
 
 ## Upstream Merge Policy
 - When merging upstream `main` into `ice`, prefer upstream semantics over locally divergent patches; keep a local divergence only with documented production evidence (the Home/temp session-affinity model is such a deliberate divergence).
+- The full inventory of deliberate divergences lives in `docs/ice-divergences.md`; key sites carry `// ice divergence: ...` markers. Divergences NOT in that inventory are merge residue — take upstream. Keep the inventory and markers updated when a divergence is added or dropped.
 - Precedent: the v7.2.128 merge dropped the local Gemini 500 `"status":"UNKNOWN"` request-fault guard to follow upstream's `clienterror.IsRequestFault` classification.
 
 ## Deployment Notes
 - On production hosts, the live CLIProxyAPI service is `cliproxyapi` and runs with `-config /home/iec/deploy/etc/cliproxyapi.yaml`.
 - Live auth files are under `~/deploy/auths/`; runtime logs are written under `~/deploy/logs/` (the old `~/deploy/auths/logs/` path is historical only).
 - Production deployment is driven from the `claude-relay-server` control repo: `scripts/cliproxy-update.sh` runs on the control host (ice-db-server), builds this repo's `ice` checkout at `~/CLIProxyAPI` once, and deploys in canary order `ice-do-db` → `ice-server-4` → `ice-do-web-1` with versioned installs, symlink flip, restart, health/process verification, a per-host relay reload, and release-ledger entries. It is dry-run by default; pass `--execute` (optionally `--host <name>`). Account files (`~/deploy/auths/`) and configs are never touched. The withdrawn `.75` pool and the retired hosts `ice-server` / `ice-server-2` / `ice-server-3` must not be deployed.
-- `server-deploy-all.sh` in this repo is a stale legacy path (its TARGETS still list retired hosts); do not use it for production deploys.
+- `server-deploy-all.sh` was removed (stale legacy; its TARGETS listed retired hosts). Use only the control-repo path above. After any merge touching Codex transport code, run `scripts/codex_responses_probe.sh` against each deployed host as the pinned Codex Responses probe.

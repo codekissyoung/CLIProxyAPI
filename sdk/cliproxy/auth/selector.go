@@ -837,8 +837,10 @@ func availabilityBlock(unavailable, quotaExceeded bool, nextRetryAfter, nextReco
 // It extracts session ID from multiple sources and maintains session-to-auth
 // mappings with automatic failover when the bound auth becomes unavailable.
 type SessionAffinitySelector struct {
-	fallback         Selector
-	cache            *SessionCache
+	fallback Selector
+	cache    *SessionCache
+	// ice divergence: Home/temp session-affinity model (fallback cache + per-slot
+	// session locks). Upstream owns the LCP matcher fields below. Keep both on merge.
 	fallbackCache    *SessionCache
 	matcher          *cliproxysession.MerklePrefixMatcher
 	subagentAffinity bool

@@ -5,6 +5,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	log "github.com/sirupsen/logrus"
 )
 
 const (
@@ -21,12 +23,14 @@ type sessionEntry struct {
 
 // SessionCache provides TTL-based session to auth mapping with automatic cleanup.
 type SessionCache struct {
-	mu                   sync.RWMutex
-	entries              map[string]sessionEntry
-	groups               map[string]sessionEntry
-	evictionOrder        *list.List
-	evictionElements     map[string]*list.Element
-	maxEntries           int
+	mu               sync.RWMutex
+	entries          map[string]sessionEntry
+	groups           map[string]sessionEntry
+	evictionOrder    *list.List
+	evictionElements map[string]*list.Element
+	maxEntries       int
+	// ice divergence: binding counting + stopped guards are local-only features;
+	// upstream owns the LRU fields above. Keep both on merge. docs/ice-divergences.md
 	bindingCounts        map[string]int
 	bindingCountObserver func(authID string, count int)
 	ttl                  time.Duration
@@ -253,6 +257,14 @@ func (c *SessionCache) evictExcessLocked() {
 			delete(c.evictionElements, primaryKey)
 			continue
 		}
+		// Eviction silently drops a live session binding: that session loses its
+		// home-affinity assignment and is re-picked on its next request. Log it so
+		// operators can distinguish eviction from TTL expiry and judge maxEntries.
+		log.WithFields(log.Fields{
+			"auth_id":     group.authID,
+			"entries":     len(c.entries),
+			"max_entries": c.maxEntries,
+		}).Warn("session cache evicted oldest bound session; its home affinity will be reassigned")
 		c.removeAliasGroupLocked(group)
 	}
 }

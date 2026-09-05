@@ -156,6 +156,8 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	var outputItemsFallback [][]byte
 	outputItemsRetained := 0
 	outputItemsDropped := false
+	// ice divergence: cap retained output items (codexOutputItemsRetainLimit,
+	// 16 MiB) instead of buffering unboundedly for the response.completed patch.
 	collectOutputItem := func(data []byte) {
 		if outputItemsDropped {
 			return

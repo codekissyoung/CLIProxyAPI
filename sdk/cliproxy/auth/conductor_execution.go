@@ -444,6 +444,8 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 	}
 	attempted := make(map[string]struct{})
 	var lastErr error
+	// ice divergence: xAI OAuth concurrency gating (concurrencyBusy /
+	// releaseConcurrency); keep alongside upstream's upstreamErr tracking.
 	concurrencyBusy := false
 	var upstreamErr error
 	for {
@@ -659,6 +661,8 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 	}
 	attempted := make(map[string]struct{})
 	var lastErr error
+	// ice divergence: xAI OAuth concurrency gating (concurrencyBusy /
+	// releaseConcurrency); keep alongside upstream's upstreamErr tracking.
 	concurrencyBusy := false
 	var upstreamErr error
 	for {
@@ -879,6 +883,8 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 	homeSameAuthRetryPending := false
 	attempted := make(map[string]struct{})
 	var lastErr error
+	// ice divergence: xAI OAuth concurrency gating (concurrencyBusy /
+	// releaseConcurrency); keep alongside upstream's upstreamErr tracking.
 	concurrencyBusy := false
 	var upstreamErr error
 	var roundTiming homeRetryRoundTiming

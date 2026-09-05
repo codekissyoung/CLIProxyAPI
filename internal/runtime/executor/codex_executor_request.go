@@ -59,6 +59,9 @@ type codexCachedTransport struct {
 
 // codexHTTPClient returns a connection pool dedicated to one auth and its
 // effective proxy. This preserves a single-client upstream transport shape.
+//
+// ice divergence: per-auth+proxy transport caching is a deliberate local choice
+// (see AGENTS.md "Forwarding model"); upstream builds one-off clients.
 func codexHTTPClient(ctx context.Context, cfg *config.Config, auth *cliproxyauth.Auth) *http.Client {
 	if rt, ok := ctx.Value("cliproxy.roundtripper").(http.RoundTripper); ok && rt != nil {
 		return &http.Client{Transport: rt}
