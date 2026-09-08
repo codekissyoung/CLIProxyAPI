@@ -19,6 +19,9 @@ Key conflict sites are tagged in code with `// ice divergence: ...`.
    long-lived Claude Code / Codex sessions. This is the documented divergence
    referenced by AGENTS.md. Upstream's Merkle LCP matcher and
    fork/subagent alias isolation layer on top of it — keep both.
+   Upstream's `TestManagerSessionAffinityAliasCooldownPreservesSelection`
+   (added in 5ab0bca0) asserts failover rebind semantics; the ice adaptation
+   expects explicit sessions to return to the recovered home credential.
 
 2. **Session binding counts** (`session_cache.go`)
    `bindingCounts` + `SetBindingCountObserver`/`BindingCount` report logical

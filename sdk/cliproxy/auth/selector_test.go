@@ -2390,3 +2390,213 @@ func TestSessionAffinitySelectorUsesRequestPayloadWhenOriginalRequestMissing(t *
 		t.Fatalf("request-only conversation changed auth from %q to %q", first.ID, second.ID)
 	}
 }
+
+func TestSessionCache_StopConcurrent(t *testing.T) {
+	t.Parallel()
+	for iter := 0; iter < 100; iter++ {
+		cache := NewSessionCache(time.Minute)
+		var wg sync.WaitGroup
+		for i := 0; i < 20; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				cache.Stop()
+			}()
+		}
+		wg.Wait()
+	}
+}
+
+type mockStoppableSelector struct {
+	stopped bool
+}
+
+func (m *mockStoppableSelector) Pick(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, auths []*Auth) (*Auth, error) {
+	return nil, nil
+}
+
+func (m *mockStoppableSelector) Stop() {
+	m.stopped = true
+}
+
+func TestManagerSetSelectorStopsReplacedStoppableSelector(t *testing.T) {
+	t.Parallel()
+	mockSelector := &mockStoppableSelector{}
+	manager := NewManager(nil, mockSelector, nil)
+
+	manager.SetSelector(&RoundRobinSelector{})
+
+	if !mockSelector.stopped {
+		t.Fatal("expected previous StoppableSelector to be stopped when replaced via SetSelector")
+	}
+}
+
+type zeroSizeSelectorA struct {
+	stopped *bool
+}
+
+func (z zeroSizeSelectorA) Pick(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, auths []*Auth) (*Auth, error) {
+	return nil, nil
+}
+
+func (z zeroSizeSelectorA) Stop() {
+	if z.stopped != nil {
+		*z.stopped = true
+	}
+}
+
+type zeroSizeSelectorB struct{}
+
+func (z zeroSizeSelectorB) Pick(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, auths []*Auth) (*Auth, error) {
+	return nil, nil
+}
+
+func TestManagerSetSelectorDifferentZeroSizedSelectors(t *testing.T) {
+	t.Parallel()
+	stoppedA := false
+	selA := zeroSizeSelectorA{stopped: &stoppedA}
+	selB := zeroSizeSelectorB{}
+
+	manager := NewManager(nil, selA, nil)
+	manager.SetSelector(selB)
+
+	if !stoppedA {
+		t.Fatal("expected zeroSizeSelectorA to be stopped when replaced by zeroSizeSelectorB")
+	}
+	if manager.Selector() != selB {
+		t.Fatalf("expected manager selector to be selB, got %#v", manager.Selector())
+	}
+}
+
+type uncomparableSelector struct {
+	fn func()
+}
+
+func (u uncomparableSelector) Pick(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, auths []*Auth) (*Auth, error) {
+	return nil, nil
+}
+
+func TestManagerSetSelectorUncomparableTypes(t *testing.T) {
+	t.Parallel()
+	manager := NewManager(nil, nil, nil)
+
+	sel1 := uncomparableSelector{fn: func() {}}
+	sel2 := uncomparableSelector{fn: func() {}}
+
+	// Setting uncomparable types must not panic
+	manager.SetSelector(sel1)
+	manager.SetSelector(sel2)
+	manager.SetSelector(nil)
+}
+
+func TestManagerSetSelectorSameInstanceDoesNotStop(t *testing.T) {
+	t.Parallel()
+	mockSelector := &mockStoppableSelector{}
+	manager := NewManager(nil, mockSelector, nil)
+
+	// Setting the same instance should be a no-op and not call Stop
+	manager.SetSelector(mockSelector)
+	if mockSelector.stopped {
+		t.Fatal("setting the same selector instance unexpectedly called Stop")
+	}
+}
+
+func TestManagerSetSelectorConcurrent(t *testing.T) {
+	t.Parallel()
+	manager := NewManager(nil, nil, nil)
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 10; j++ {
+				sel := &mockStoppableSelector{}
+				manager.SetSelector(sel)
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+func TestSessionAffinitySelector_LongCompositeIDBoundConsistency(t *testing.T) {
+	t.Parallel()
+	fallback := &RoundRobinSelector{}
+	selector := NewSessionAffinitySelector(fallback)
+	defer selector.Stop()
+
+	auths := []*Auth{{ID: "auth-1"}}
+	longSession := strings.Repeat("s", 200)
+	longAgent := strings.Repeat("a", 100)
+
+	opts := cliproxyexecutor.Options{
+		Headers: http.Header{
+			"X-Claude-Code-Session-Id": []string{longSession},
+			"X-Claude-Code-Agent-Id":   []string{longAgent},
+		},
+		Metadata: make(map[string]any),
+	}
+
+	auth, err := selector.Pick(context.Background(), "claude", "claude-3-7-sonnet", opts, auths)
+	if err != nil || auth == nil {
+		t.Fatalf("selector.Pick failed: %v", err)
+	}
+
+	canonicalID, ok := opts.Metadata[cliproxyexecutor.CanonicalSessionIDMetadataKey].(string)
+	if !ok || canonicalID == "" {
+		t.Fatalf("canonical session ID not set in metadata")
+	}
+	if len(canonicalID) > 256 {
+		t.Fatalf("canonical ID length = %d, want <= 256", len(canonicalID))
+	}
+	if !strings.Contains(canonicalID, "#") {
+		t.Fatalf("canonical ID %q missing hash separator", canonicalID)
+	}
+
+	// Verify CanonicalSessionID helper returns the same bounded identity
+	resolvedID := CanonicalSessionID(opts.Headers, opts.OriginalRequest, opts.Metadata)
+	if resolvedID != canonicalID {
+		t.Fatalf("CanonicalSessionID %q != metadata canonical %q", resolvedID, canonicalID)
+	}
+}
+
+func TestSessionAffinitySelector_DerivedIDBoundConsistencyOnResult(t *testing.T) {
+	t.Parallel()
+	fallback := &RoundRobinSelector{}
+	selector := NewSessionAffinitySelector(fallback)
+	defer selector.Stop()
+
+	auths := []*Auth{{ID: "auth-a"}, {ID: "auth-b"}}
+	longDerivedRaw := strings.Repeat("d", 250)
+
+	opts := cliproxyexecutor.Options{
+		Metadata: map[string]any{
+			cliproxyexecutor.DerivedSessionIDMetadataKey: longDerivedRaw,
+		},
+	}
+
+	// 1. Pick establishes initial binding
+	pickedAuth, err := selector.Pick(context.Background(), "openai", "gpt-5.4", opts, auths)
+	if err != nil || pickedAuth == nil {
+		t.Fatalf("Pick failed: %v", err)
+	}
+
+	// 2. OnResult records success under bounded derived key
+	res := Result{
+		AuthID:   pickedAuth.ID,
+		Provider: "openai",
+		Model:    "gpt-5.4",
+		Success:  true,
+		Options:  opts,
+	}
+	selector.OnResult(res)
+
+	// 3. Next Pick with reverse candidates must hit the same bound credential
+	reverseAuths := []*Auth{{ID: "auth-b"}, {ID: "auth-a"}}
+	secondPicked, err := selector.Pick(context.Background(), "openai", "gpt-5.4", opts, reverseAuths)
+	if err != nil || secondPicked == nil {
+		t.Fatalf("second Pick failed: %v", err)
+	}
+	if secondPicked.ID != pickedAuth.ID {
+		t.Fatalf("affinity failed: got auth %s, want %s", secondPicked.ID, pickedAuth.ID)
+	}
+}
