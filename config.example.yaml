@@ -249,8 +249,9 @@ routing:
 
 # Codex provider behavior.
 codex:
-  # When true, and routing.strategy is fill-first or routing.session-affinity is true,
-  # remap Codex prompt_cache_key and installation identity per selected auth.
+  # When true, remap Codex prompt_cache_key and installation identity per selected auth.
+  # Applies under any routing strategy (it no longer requires fill-first or
+  # session-affinity; a routing change cannot silently disable it).
   # Some superstitious users believe request tracking identifiers can be used
   # as evidence for TOS enforcement bans; this option only satisfies those odd concerns.
   identity-confuse: false

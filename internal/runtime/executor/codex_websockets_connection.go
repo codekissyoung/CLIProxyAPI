@@ -112,6 +112,8 @@ func buildCodexWebsocketRequestBody(body []byte) []byte {
 	// Incremental follow-up turns continue on the same websocket using
 	// `previous_response_id` + incremental `input`, not `response.append`.
 	body = helps.SanitizeCodexInputItemIDs(body)
+	body = stripCodexBodyTurnMetadataWorkspaces(body)
+	body = stripCodexBodyIdentityMetadataMirrors(body)
 	wsReqBody, errSet := sjson.SetBytes(body, "type", "response.create")
 	if errSet == nil && len(wsReqBody) > 0 {
 		return wsReqBody

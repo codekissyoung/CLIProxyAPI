@@ -24,6 +24,10 @@ func applyCodexPromptCacheHeaders(from sdktranslator.Format, req cliproxyexecuto
 }
 
 func applyCodexPromptCacheHeadersWithContext(ctx context.Context, from sdktranslator.Format, req cliproxyexecutor.Request, rawJSON []byte, headerSets ...http.Header) ([]byte, http.Header, error) {
+	return applyCodexPromptCacheHeadersWithAuth(ctx, nil, from, req, rawJSON, headerSets...)
+}
+
+func applyCodexPromptCacheHeadersWithAuth(ctx context.Context, auth *cliproxyauth.Auth, from sdktranslator.Format, req cliproxyexecutor.Request, rawJSON []byte, headerSets ...http.Header) ([]byte, http.Header, error) {
 	headers := http.Header{}
 	if len(rawJSON) == 0 {
 		return rawJSON, headers, nil
@@ -34,6 +38,7 @@ func applyCodexPromptCacheHeadersWithContext(ctx context.Context, from sdktransl
 		requestHeaders = headerSets[0]
 	}
 	var cache helps.CodexCache
+	clientProvidedCacheKey := false
 	if sourceFormatEqual(from, sdktranslator.FormatClaude) {
 		modelName := strings.TrimSpace(gjson.GetBytes(rawJSON, "model").String())
 		if modelName == "" {
@@ -49,11 +54,13 @@ func applyCodexPromptCacheHeadersWithContext(ctx context.Context, from sdktransl
 	} else if sourceFormatEqual(from, sdktranslator.FormatOpenAIResponse) {
 		if promptCacheKey := gjson.GetBytes(req.Payload, "prompt_cache_key"); promptCacheKey.Exists() {
 			cache.ID = promptCacheKey.String()
+			clientProvidedCacheKey = strings.TrimSpace(cache.ID) != ""
 		}
 	}
 	if cache.ID == "" {
 		cache.ID = helps.ProviderSessionUUID("codex", req.Metadata)
 	}
+	cache.ID = accountScopedPromptCacheKey(cache.ID, clientProvidedCacheKey, auth)
 
 	if cache.ID != "" {
 		rawJSON = helps.SetStringIfDifferent(rawJSON, "prompt_cache_key", cache.ID)
@@ -88,10 +95,21 @@ func applyCodexWebsocketHeaders(ctx context.Context, headers http.Header, auth *
 	} else {
 		ensureHeaderWithPriority(headers, ginHeaders, "x-codex-beta-features", cfgBetaFeatures, codexBetaFeatures)
 	}
-	misc.EnsureHeader(headers, ginHeaders, "x-codex-turn-state", "")
+	// ice divergence: x-codex-turn-state is intentionally NOT forwarded upstream.
+	// The value is a sticky session-routing token minted under whichever account
+	// served an earlier turn; echoing it upstream from a different pool account
+	// would deterministically link those accounts as one client. The HTTP path
+	// never sends it, and turn resumption here relies on the pinned
+	// previous_response_id / full-replay flow instead. The downstream upgrade
+	// response still echoes the client value so client reconnect logic is
+	// unchanged.
 	misc.EnsureHeader(headers, ginHeaders, "x-codex-turn-metadata", "")
 	stripCodexTurnMetadataWorkspaces(headers)
 	misc.EnsureHeader(headers, ginHeaders, "x-client-request-id", "")
+	if strings.TrimSpace(headers.Get("x-client-request-id")) == "" {
+		// The real CLI mints a fresh request id per request; never leave it empty.
+		headers.Set("x-client-request-id", uuid.NewString())
+	}
 	misc.EnsureHeader(headers, ginHeaders, "x-responsesapi-include-timing-metrics", "")
 	if isAPIKey {
 		misc.EnsureHeader(headers, ginHeaders, "Version", "")

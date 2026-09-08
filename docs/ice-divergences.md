@@ -79,9 +79,39 @@ Key conflict sites are tagged in code with `// ice divergence: ...`.
     blocked/record helpers — local diagnostics requiring the
     `cliproxyauth`/`cliproxyexecutor` imports upstream removes.
 
+11. **Codex identity surface hardening** (2026-09-09;
+    `codex_executor_request.go`, `codex_websockets_request.go`,
+    `codex_websockets_connection.go`, `codex_executor_execute.go`,
+    `codex_executor_stream.go`, `codex_openai_images.go`;
+    pinned by `codex_identity_hardening_test.go`)
+    Extensions of upstream's identity-confuse plus unconditional strips:
+    - body-mirrored `client_metadata.x-codex-turn-metadata` gets its
+      `workspaces` subtree stripped unconditionally
+      (`stripCodexBodyTurnMetadataWorkspaces`); upstream only strips the
+      header copy;
+    - `client_metadata.ws_request_header_*` mirrors of identity/session
+      headers are deleted (`stripCodexBodyIdentityMetadataMirrors`);
+    - WS handshakes never forward `x-codex-turn-state` upstream (sticky
+      turn token minted under a possibly different pool account);
+    - turn-metadata `session_id`/`thread_id` and top-level
+      `session_id`/`conversation` are confused per account
+      (`confuseTrackedValue`);
+    - proxy-generated `prompt_cache_key`/`Session-Id` are account-scoped
+      (`accountScopedPromptCacheKey`) so a generated key can never appear
+      under two accounts;
+    - `codexIdentityConfuseEnabled` depends only on
+      `codex.identity-confuse`, not on the routing strategy (a routing
+      change can no longer silently disable confusion);
+    - `X-Client-Request-Id` stays per-request (client value passthrough,
+      fresh UUID when absent) instead of being collapsed onto the confused
+      session id;
+    - client-facing error bodies are parsed from the identity-restored copy
+      on the HTTP/SSE/compact/WS/images paths, so confused identifiers
+      never leak to the client.
+
 ## Config / docs
 
-11. **`config.example.yaml`** — `session-affinity-ttl: "24h"` (see #7).
+12. **`config.example.yaml`** — `session-affinity-ttl: "24h"` (see #7).
     All other upstream options merge in as a union.
 
 12. **AGENTS.md Deployment Notes / Merge Policy sections** — ice-only;

@@ -78,7 +78,7 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 		return resp, err
 	}
 
-	body, wsHeaders, errPromptCache := applyCodexPromptCacheHeadersWithContext(ctx, from, req, body, opts.Headers)
+	body, wsHeaders, errPromptCache := applyCodexPromptCacheHeadersWithAuth(ctx, auth, from, req, body, opts.Headers)
 	if errPromptCache != nil {
 		return resp, errPromptCache
 	}
@@ -305,7 +305,11 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 		helps.EmitWebSocketResponseEvent(ctx, opts, auth, e.Identifier(), req.Model, payload)
 		payload = helps.RestoreCodexMultiAgentV2Response(payload, restoreMultiAgentV2)
 
-		if wsErr, ok := parseCodexWebsocketError(payload); ok {
+		// Client-facing errors are parsed from the identity-restored copy so the
+		// client never sees confused identifiers; internal bookkeeping keeps the
+		// confused payload.
+		clientErrPayload := applyCodexIdentityExposeResponsePayload(payload, identityState)
+		if wsErr, ok := parseCodexWebsocketError(clientErrPayload); ok {
 			if sess != nil {
 				e.invalidateUpstreamConn(sess, conn, "upstream_error", wsErr)
 			}
@@ -317,7 +321,7 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 			codexContextRejectRecord(upstreamBody, []byte(wsErr.Error()))
 			return resp, wsErr
 		}
-		if streamErr, terminalBody, ok := codexTerminalFailureErr(payload); ok {
+		if streamErr, terminalBody, ok := codexTerminalFailureErr(clientErrPayload); ok {
 			if sess != nil {
 				unlockSession()
 				e.invalidateUpstreamConn(sess, conn, "terminal_failure", streamErr)

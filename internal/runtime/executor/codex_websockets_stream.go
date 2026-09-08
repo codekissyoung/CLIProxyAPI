@@ -75,7 +75,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 		return nil, err
 	}
 
-	body, wsHeaders, errPromptCache := applyCodexPromptCacheHeadersWithContext(ctx, from, req, body, opts.Headers)
+	body, wsHeaders, errPromptCache := applyCodexPromptCacheHeadersWithAuth(ctx, auth, from, req, body, opts.Headers)
 	if errPromptCache != nil {
 		return nil, errPromptCache
 	}
@@ -347,7 +347,11 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 			helps.EmitWebSocketResponseEvent(ctx, opts, auth, e.Identifier(), req.Model, payload)
 			payload = helps.RestoreCodexMultiAgentV2Response(payload, restoreMultiAgentV2)
 
-			if wsErr, ok := parseCodexWebsocketError(payload); ok {
+			// Client-facing errors are parsed from the identity-restored copy so the
+			// client never sees confused identifiers; internal bookkeeping keeps the
+			// confused payload.
+			clientErrPayload := applyCodexIdentityExposeResponsePayload(payload, identityState)
+			if wsErr, ok := parseCodexWebsocketError(clientErrPayload); ok {
 				if sess != nil {
 					e.invalidateUpstreamConn(sess, conn, "upstream_error", wsErr)
 					sess.clearActive(conn, readCh)
@@ -365,7 +369,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 				reporter.PublishFailure(ctx, wsErr)
 				return nil, wsErr
 			}
-			if streamErr, terminalBody, ok := codexTerminalFailureErr(payload); ok {
+			if streamErr, terminalBody, ok := codexTerminalFailureErr(clientErrPayload); ok {
 				// A transient capacity rejection is retried on another credential, so the
 				// downstream websocket session must survive this upstream teardown. Notifying
 				// the disconnect here would close the client connection before the retry can
@@ -583,7 +587,11 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 			helps.EmitWebSocketResponseEvent(ctx, opts, auth, e.Identifier(), req.Model, payload)
 			payload = helps.RestoreCodexMultiAgentV2Response(payload, restoreMultiAgentV2)
 
-			if wsErr, ok := parseCodexWebsocketError(payload); ok {
+			// Client-facing errors are parsed from the identity-restored copy so the
+			// client never sees confused identifiers; internal bookkeeping keeps the
+			// confused payload.
+			clientErrPayload := applyCodexIdentityExposeResponsePayload(payload, identityState)
+			if wsErr, ok := parseCodexWebsocketError(clientErrPayload); ok {
 				terminateReason = "upstream_error"
 				terminateErr = wsErr
 				if sess != nil {
@@ -603,7 +611,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 				_ = send(cliproxyexecutor.StreamChunk{Err: wsErr})
 				return
 			}
-			if streamErr, terminalBody, ok := codexTerminalFailureErr(payload); ok {
+			if streamErr, terminalBody, ok := codexTerminalFailureErr(clientErrPayload); ok {
 				terminateReason = "upstream_error"
 				terminateErr = streamErr
 				if sess != nil {

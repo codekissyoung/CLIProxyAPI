@@ -143,7 +143,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 			Transport: "http", ReqBytes: len(upstreamBody),
 		})
 		codexContextRejectRecord(upstreamBody, data)
-		err = newCodexStatusErr(httpResp.StatusCode, data)
+		err = newCodexStatusErr(httpResp.StatusCode, applyCodexIdentityExposeResponsePayload(data, identityState))
 		return nil, err
 	}
 
@@ -205,7 +205,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 				observeCodexTokenEvent(reporter, data)
 				translatedLine = append([]byte("data: "), data...)
 				eventType := gjson.GetBytes(data, "type").String()
-				if streamErr, terminalBody, ok := codexTerminalFailureErr(data); ok {
+				if streamErr, terminalBody, ok := codexTerminalFailureErr(applyCodexIdentityExposeResponsePayload(data, identityState)); ok {
 					closeBootstrapBody()
 					if errClearReplay := clearCodexReasoningReplayOnInvalidSignature(ctx, replayScope, streamErr.StatusCode(), terminalBody); errClearReplay != nil {
 						helps.RecordAPIResponseError(ctx, e.cfg, errClearReplay)
@@ -345,7 +345,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 				observeCodexTokenEvent(reporter, data)
 				translatedLine = append([]byte("data: "), data...)
 				eventType := gjson.GetBytes(data, "type").String()
-				if streamErr, terminalBody, ok := codexTerminalFailureErr(data); ok {
+				if streamErr, terminalBody, ok := codexTerminalFailureErr(applyCodexIdentityExposeResponsePayload(data, identityState)); ok {
 					if errClearReplay := clearCodexReasoningReplayOnInvalidSignature(ctx, replayScope, streamErr.StatusCode(), terminalBody); errClearReplay != nil {
 						helps.RecordAPIResponseError(ctx, e.cfg, errClearReplay)
 						reporter.PublishFailure(ctx, errClearReplay)

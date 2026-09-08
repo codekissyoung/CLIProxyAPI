@@ -239,6 +239,7 @@ func (e *CodexExecutor) cacheHelper(ctx context.Context, from sdktranslator.Form
 	if len(headerSets) > 0 {
 		headers = headerSets[0]
 	}
+	clientProvidedCacheKey := strings.TrimSpace(gjson.GetBytes(userPayload, "prompt_cache_key").String()) != ""
 	var cache helps.CodexCache
 	if sourceFormatEqual(from, sdktranslator.FormatClaude) {
 		modelName := strings.TrimSpace(gjson.GetBytes(rawJSON, "model").String())
@@ -273,11 +274,14 @@ func (e *CodexExecutor) cacheHelper(ctx context.Context, from sdktranslator.Form
 	if cache.ID == "" {
 		cache.ID = helps.ProviderSessionUUID("codex", req.Metadata)
 	}
+	cache.ID = accountScopedPromptCacheKey(cache.ID, clientProvidedCacheKey, auth)
 
 	if cache.ID != "" {
 		rawJSON = helps.SetStringIfDifferent(rawJSON, "prompt_cache_key", cache.ID)
 	}
 	rawJSON = helps.SanitizeCodexInputItemIDs(rawJSON)
+	rawJSON = stripCodexBodyTurnMetadataWorkspaces(rawJSON)
+	rawJSON = stripCodexBodyIdentityMetadataMirrors(rawJSON)
 	var identityState codexIdentityConfuseState
 	rawJSON, identityState = applyCodexIdentityConfuseBody(e.cfg, auth, userPayload, rawJSON)
 	if identityState.promptCacheKey != "" {
@@ -291,6 +295,46 @@ func (e *CodexExecutor) cacheHelper(ctx context.Context, from sdktranslator.Form
 		httpReq.Header.Set("Session-Id", cache.ID)
 	}
 	return httpReq, rawJSON, identityState, nil
+}
+
+// accountScopedPromptCacheKey seeds proxy-generated prompt cache keys with the
+// serving account. Client-supplied keys pass through untouched here; the
+// identity-confuse stage remaps those per account separately.
+// ice divergence: an account-independent derived key replayed under a second
+// account after failover is a deterministic pool fingerprint.
+func accountScopedPromptCacheKey(cacheID string, clientProvided bool, auth *cliproxyauth.Auth) string {
+	cacheID = strings.TrimSpace(cacheID)
+	if cacheID == "" || clientProvided || auth == nil || strings.TrimSpace(auth.ID) == "" {
+		return cacheID
+	}
+	return codexIdentityConfuseUUID(auth.ID, "prompt-cache", cacheID)
+}
+
+// stripCodexBodyIdentityMetadataMirrors drops client_metadata keys that mirror
+// identity/session WS headers (ws_request_header_session_id and friends). The
+// corresponding real headers are already handled by the header path (confused
+// or stripped); leaving body mirrors in place would bypass that handling.
+// Unlike identity confusion this strip is unconditional.
+func stripCodexBodyIdentityMetadataMirrors(rawJSON []byte) []byte {
+	metadata := gjson.GetBytes(rawJSON, "client_metadata")
+	if !metadata.IsObject() {
+		return rawJSON
+	}
+	metadata.ForEach(func(key, _ gjson.Result) bool {
+		name := strings.ToLower(key.String())
+		if !strings.HasPrefix(name, "ws_request_header_") {
+			return true
+		}
+		headerName := strings.ReplaceAll(strings.TrimPrefix(name, "ws_request_header_"), "_", "-")
+		switch headerName {
+		case "session-id", "conversation-id", "x-client-request-id", "thread-id", "x-codex-window-id", "x-codex-turn-state", "x-codex-turn-metadata":
+			if cleaned, errDelete := sjson.DeleteBytes(rawJSON, "client_metadata."+key.String()); errDelete == nil {
+				rawJSON = cleaned
+			}
+		}
+		return true
+	})
+	return rawJSON
 }
 
 func applyCodexIdentityConfuseBody(cfg *config.Config, auth *cliproxyauth.Auth, userPayload []byte, rawJSON []byte) ([]byte, codexIdentityConfuseState) {
@@ -313,6 +357,20 @@ func applyCodexIdentityConfuseBody(cfg *config.Config, auth *cliproxyauth.Auth, 
 	if state.promptCacheKey != "" {
 		if windowID := strings.TrimSpace(gjson.GetBytes(rawJSON, "client_metadata.x-codex-window-id").String()); windowID != "" {
 			rawJSON, _ = sjson.SetBytes(rawJSON, "client_metadata.x-codex-window-id", state.promptCacheKey+":0")
+		}
+	}
+	// ice divergence: rewrite any other stable client session identifiers
+	// per account so cross-account failover never replays the same value.
+	if sessionID := strings.TrimSpace(gjson.GetBytes(rawJSON, "session_id").String()); sessionID != "" {
+		rawJSON, _ = sjson.SetBytes(rawJSON, "session_id", state.confuseTrackedValue("session", sessionID))
+	}
+	if conversation := gjson.GetBytes(rawJSON, "conversation"); conversation.Type == gjson.String {
+		if conversationID := strings.TrimSpace(conversation.String()); conversationID != "" {
+			rawJSON, _ = sjson.SetBytes(rawJSON, "conversation", state.confuseTrackedValue("conversation", conversationID))
+		}
+	} else if conversation.IsObject() {
+		if conversationID := strings.TrimSpace(conversation.Get("id").String()); conversationID != "" {
+			rawJSON, _ = sjson.SetBytes(rawJSON, "conversation.id", state.confuseTrackedValue("conversation", conversationID))
 		}
 	}
 
@@ -338,7 +396,10 @@ func applyCodexIdentityConfuseHeaders(headers http.Header, state *codexIdentityC
 	if headerValueCaseInsensitive(headers, "Conversation_id") != "" {
 		setHeaderCasePreserved(headers, "Conversation_id", state.promptCacheKey)
 	}
-	headers.Set("X-Client-Request-Id", state.promptCacheKey)
+	// X-Client-Request-Id is per-request in the real client; it is never
+	// rewritten here (a session-scoped constant would be an impossible
+	// signature). Thread-Id and Window-Id are session-scoped and follow the
+	// confused session identity.
 	headers.Set("Thread-Id", state.promptCacheKey)
 	headers.Set("X-Codex-Window-Id", state.promptCacheKey+":0")
 }
@@ -355,6 +416,15 @@ func applyCodexTurnMetadataIdentityConfuse(rawTurnMetadata string, state *codexI
 	}
 	if turnID := strings.TrimSpace(gjson.Get(rawTurnMetadata, "turn_id").String()); turnID != "" {
 		updatedTurnMetadata, _ = sjson.Set(updatedTurnMetadata, "turn_id", state.confuseTurnID(turnID))
+	}
+	// ice divergence: session_id/thread_id inside turn metadata are stable
+	// client session identifiers; rewrite them per account like turn_id so a
+	// temporary failover never exposes the same value under a second account.
+	if sessionID := strings.TrimSpace(gjson.Get(rawTurnMetadata, "session_id").String()); sessionID != "" {
+		updatedTurnMetadata, _ = sjson.Set(updatedTurnMetadata, "session_id", state.confuseTrackedValue("session", sessionID))
+	}
+	if threadID := strings.TrimSpace(gjson.Get(rawTurnMetadata, "thread_id").String()); threadID != "" {
+		updatedTurnMetadata, _ = sjson.Set(updatedTurnMetadata, "thread_id", state.confuseTrackedValue("thread", threadID))
 	}
 	if state.promptCacheKey != "" && gjson.Get(rawTurnMetadata, "window_id").Exists() {
 		updatedTurnMetadata, _ = sjson.Set(updatedTurnMetadata, "window_id", state.promptCacheKey+":0")
@@ -379,18 +449,24 @@ func applyCodexIdentityExposeResponsePayload(payload []byte, state codexIdentity
 }
 
 func (state *codexIdentityConfuseState) confuseTurnID(turnID string) string {
-	turnID = strings.TrimSpace(turnID)
-	if state == nil || !state.enabled || strings.TrimSpace(state.authID) == "" || turnID == "" {
-		return turnID
+	return state.confuseTrackedValue("turn", turnID)
+}
+
+// confuseTrackedValue rewrites any stable identifier deterministically per
+// account and records the pair so downstream responses can be restored.
+func (state *codexIdentityConfuseState) confuseTrackedValue(kind string, value string) string {
+	value = strings.TrimSpace(value)
+	if state == nil || !state.enabled || strings.TrimSpace(state.authID) == "" || value == "" {
+		return value
 	}
 	for _, replacement := range state.turnIDs {
-		if replacement.original == turnID || replacement.confused == turnID {
+		if replacement.original == value || replacement.confused == value {
 			return replacement.confused
 		}
 	}
-	confusedTurnID := codexIdentityConfuseUUID(state.authID, "turn", turnID)
-	state.turnIDs = append(state.turnIDs, codexIdentityReplacement{original: turnID, confused: confusedTurnID})
-	return confusedTurnID
+	confusedValue := codexIdentityConfuseUUID(state.authID, kind, value)
+	state.turnIDs = append(state.turnIDs, codexIdentityReplacement{original: value, confused: confusedValue})
+	return confusedValue
 }
 
 func replaceCodexIdentityResponsePayload(payload []byte, from string, to string) []byte {
@@ -403,11 +479,12 @@ func replaceCodexIdentityResponsePayload(payload []byte, from string, to string)
 }
 
 func codexIdentityConfuseEnabled(cfg *config.Config) bool {
-	if cfg == nil || !cfg.Codex.IdentityConfuse {
-		return false
-	}
-	strategy := strings.ToLower(strings.TrimSpace(cfg.Routing.Strategy))
-	return cfg.Routing.SessionAffinity || strategy == "fill-first" || strategy == "fillfirst" || strategy == "ff"
+	// ice divergence: identity confusion depends only on its own switch. It
+	// used to also require session-affinity/fill-first routing, which meant a
+	// routing change silently disabled every application-layer anti-correlation
+	// rewrite with no warning. Per-account rewriting is well-defined under any
+	// routing strategy.
+	return cfg != nil && cfg.Codex.IdentityConfuse
 }
 
 func codexIdentityConfuseUUID(authID string, kind string, value string) string {
@@ -441,6 +518,43 @@ func stripCodexTurnMetadataWorkspaces(headers http.Header) {
 		return
 	}
 	headers[originalKey] = []string{cleaned}
+}
+
+// stripCodexBodyTurnMetadataWorkspaces mirrors stripCodexTurnMetadataWorkspaces
+// for the body-carried copy: Codex clients mirror the WS-only turn metadata
+// header into client_metadata, and the workspaces subtree (local paths, git
+// remotes, commit hashes) must never leave the proxy. Unlike identity
+// confusion this strip is unconditional.
+func stripCodexBodyTurnMetadataWorkspaces(rawJSON []byte) []byte {
+	const basePath = "client_metadata.x-codex-turn-metadata"
+	turnMetadata := gjson.GetBytes(rawJSON, basePath)
+	if !turnMetadata.Exists() {
+		return rawJSON
+	}
+	if turnMetadata.IsObject() {
+		if !gjson.GetBytes(rawJSON, basePath+".workspaces").Exists() {
+			return rawJSON
+		}
+		if cleaned, errDelete := sjson.DeleteBytes(rawJSON, basePath+".workspaces"); errDelete == nil {
+			return cleaned
+		}
+		return rawJSON
+	}
+	if turnMetadata.Type != gjson.String {
+		return rawJSON
+	}
+	raw := strings.TrimSpace(turnMetadata.String())
+	if raw == "" || !gjson.Valid(raw) || !gjson.Get(raw, "workspaces").Exists() {
+		return rawJSON
+	}
+	cleaned, errDelete := sjson.Delete(raw, "workspaces")
+	if errDelete != nil {
+		return rawJSON
+	}
+	if updated, errSet := sjson.SetBytes(rawJSON, basePath, cleaned); errSet == nil {
+		return updated
+	}
+	return rawJSON
 }
 
 func applyCodexHeaders(r *http.Request, auth *cliproxyauth.Auth, token string, stream bool, cfg *config.Config, clientHeaders ...http.Header) {
@@ -508,6 +622,10 @@ func applyCodexHeadersFromSources(r *http.Request, auth *cliproxyauth.Auth, toke
 	misc.EnsureHeader(r.Header, ginHeaders, "X-Codex-Turn-Metadata", "")
 	stripCodexTurnMetadataWorkspaces(r.Header)
 	misc.EnsureHeader(r.Header, ginHeaders, "X-Client-Request-Id", "")
+	if strings.TrimSpace(r.Header.Get("X-Client-Request-Id")) == "" {
+		// The real CLI mints a fresh request id per request; never leave it empty.
+		r.Header.Set("X-Client-Request-Id", uuid.NewString())
+	}
 	misc.EnsureHeader(r.Header, ginHeaders, "X-Codex-Window-Id", "")
 	misc.EnsureHeader(r.Header, ginHeaders, "Thread-Id", "")
 	misc.EnsureHeader(r.Header, ginHeaders, "Session-Id", "")

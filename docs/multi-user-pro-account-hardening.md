@@ -33,6 +33,16 @@ API-key 路径继续保留调用方显式身份，但绝不允许空 UA 退化�
 `X-Codex-Turn-Metadata.workspaces` 仍会在 HTTP 和 WebSocket 路径剥离，避免把
 本地路径、Git 远端和 commit 信息带到共享账号上游。其余会话字段保持透传。
 
+> 2026-09-09：身份面加固（详见 `docs/ice-divergences.md` 分歧 #11）。
+> body 镜像的 `client_metadata.x-codex-turn-metadata` 现在同样剥离 workspaces
+> （此前只剥 header 版）；`client_metadata.ws_request_header_*` 的身份/会话头镜像
+> 被删除；WS 握手不再向上游透传 `x-codex-turn-state`；turn-metadata 内的
+> `session_id`/`thread_id` 与顶层 `session_id`/`conversation` 纳入按账号混淆；
+> 代理生成的 `prompt_cache_key`/`Session-Id` 一律按账号派生，不再出现跨账号同值；
+> `identity-confuse` 不再以路由策略为前提（防止路由改动静默关闭混淆）；
+> `X-Client-Request-Id` 恢复真实客户端的每请求 UUID 语义（透传或新生成），
+> 不再被覆写为会话常量；各路径返回给客户端的错误体先做混淆值反向还原。
+
 ## 0.147.0 传输基线
 
 2026-08-15 使用本机官方 Codex CLI 0.147.0 二进制分别捕获 HTTPS fallback、

@@ -230,10 +230,13 @@ func TestCodexExecutorCacheHelper_IdentityConfuseRemapsBodyAndHeaders(t *testing
 	if gotHeader := httpReq.Header["Session-Id"]; len(gotHeader) != 1 || gotHeader[0] != expectedPromptCacheKey {
 		t.Fatalf("Session-Id = %#v, want [%q]", gotHeader, expectedPromptCacheKey)
 	}
-	for _, headerName := range []string{"X-Client-Request-Id", "Thread-Id"} {
-		if gotHeader := httpReq.Header.Get(headerName); gotHeader != expectedPromptCacheKey {
-			t.Fatalf("%s = %q, want %q", headerName, gotHeader, expectedPromptCacheKey)
-		}
+	if gotHeader := httpReq.Header.Get("Thread-Id"); gotHeader != expectedPromptCacheKey {
+		t.Fatalf("Thread-Id = %q, want %q", gotHeader, expectedPromptCacheKey)
+	}
+	// X-Client-Request-Id is per-request in the real client; a client-provided
+	// value passes through instead of being collapsed onto the session id.
+	if gotHeader := httpReq.Header.Get("X-Client-Request-Id"); gotHeader != "client-request-1" {
+		t.Fatalf("X-Client-Request-Id = %q, want client-provided passthrough %q", gotHeader, "client-request-1")
 	}
 	if gotLegacySession := httpReq.Header.Get("Session_id"); gotLegacySession != "" {
 		t.Fatalf("Session_id = %q, want empty", gotLegacySession)

@@ -134,7 +134,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 			Transport: "http", ReqBytes: len(upstreamBody),
 		})
 		codexContextRejectRecord(upstreamBody, b)
-		err = newCodexStatusErr(httpResp.StatusCode, b)
+		err = newCodexStatusErr(httpResp.StatusCode, applyCodexIdentityExposeResponsePayload(b, identityState))
 		return resp, err
 	}
 	data, errRead := io.ReadAll(httpResp.Body)
@@ -158,7 +158,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 			sawOutputDelta = true
 		}
 
-		if streamErr, terminalBody, ok := codexTerminalFailureErr(eventData); ok {
+		if streamErr, terminalBody, ok := codexTerminalFailureErr(applyCodexIdentityExposeResponsePayload(eventData, identityState)); ok {
 			if errClearReplay := clearCodexReasoningReplayOnInvalidSignature(ctx, replayScope, streamErr.StatusCode(), terminalBody); errClearReplay != nil {
 				return resp, errClearReplay
 			}
@@ -315,7 +315,7 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 			Transport: "http", ReqBytes: len(upstreamBody),
 		})
 		codexContextRejectRecord(upstreamBody, b)
-		err = newCodexStatusErr(httpResp.StatusCode, b)
+		err = newCodexStatusErr(httpResp.StatusCode, applyCodexIdentityExposeResponsePayload(b, identityState))
 		return resp, err
 	}
 	data, err := io.ReadAll(httpResp.Body)

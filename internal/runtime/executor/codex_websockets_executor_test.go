@@ -1104,8 +1104,11 @@ func TestApplyCodexWebsocketHeadersDefaultsToCurrentResponsesBeta(t *testing.T) 
 	if got := headers.Get("X-Codex-Turn-Metadata"); got != "" {
 		t.Fatalf("X-Codex-Turn-Metadata = %q, want empty", got)
 	}
-	if got := headers.Get("X-Client-Request-Id"); got != "" {
-		t.Fatalf("X-Client-Request-Id = %q, want empty", got)
+	// X-Client-Request-Id is generated per request when the client did not send one.
+	if got := headers.Get("X-Client-Request-Id"); got == "" {
+		t.Fatal("X-Client-Request-Id = empty, want generated per-request id")
+	} else if err := uuid.Validate(got); err != nil {
+		t.Fatalf("X-Client-Request-Id = %q, want a UUID: %v", got, err)
 	}
 }
 
@@ -1500,8 +1503,8 @@ func TestApplyCodexWebsocketHeadersIdentityConfuseRemapsPromptCacheKey(t *testin
 	if gotCanonicalSession := headers.Get("Session-Id"); gotCanonicalSession != "" {
 		t.Fatalf("Session-Id = %q, want empty", gotCanonicalSession)
 	}
-	if gotRequestID := headers.Get("X-Client-Request-Id"); gotRequestID != expectedPromptCacheKey {
-		t.Fatalf("X-Client-Request-Id = %q, want %q", gotRequestID, expectedPromptCacheKey)
+	if gotRequestID := headers.Get("X-Client-Request-Id"); gotRequestID != "client-request-1" {
+		t.Fatalf("X-Client-Request-Id = %q, want client-provided passthrough %q", gotRequestID, "client-request-1")
 	}
 	if gotThreadID := headers.Get("Thread-Id"); gotThreadID != expectedPromptCacheKey {
 		t.Fatalf("Thread-Id = %q, want %q", gotThreadID, expectedPromptCacheKey)
@@ -1920,8 +1923,11 @@ func TestApplyCodexHeadersInjectsCapturedCLI0147Defaults(t *testing.T) {
 	if got := req.Header.Get("X-Codex-Turn-Metadata"); got != "" {
 		t.Fatalf("X-Codex-Turn-Metadata = %q, want empty", got)
 	}
-	if got := req.Header.Get("X-Client-Request-Id"); got != "" {
-		t.Fatalf("X-Client-Request-Id = %q, want empty", got)
+	// X-Client-Request-Id is generated per request when the client did not send one.
+	if got := req.Header.Get("X-Client-Request-Id"); got == "" {
+		t.Fatal("X-Client-Request-Id = empty, want generated per-request id")
+	} else if err := uuid.Validate(got); err != nil {
+		t.Fatalf("X-Client-Request-Id = %q, want a UUID: %v", got, err)
 	}
 }
 
