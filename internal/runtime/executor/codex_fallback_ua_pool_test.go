@@ -8,7 +8,7 @@ import (
 )
 
 func TestCodexFallbackUserAgentMatchesCapturedTUI0153(t *testing.T) {
-	want := "codex-tui/0.153.4 (Ubuntu 24.4.0; x86_64) dumb (codex-tui; 0.153.4)"
+	want := "codex-tui/0.153.4 (Ubuntu 22.4.0; x86_64) vscode/1.135.0 (codex-tui; 0.153.4)"
 	if codexUserAgent != want {
 		t.Fatalf("codexUserAgent = %q, want captured Codex CLI 0.153.4 UA %q", codexUserAgent, want)
 	}

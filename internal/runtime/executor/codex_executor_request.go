@@ -27,7 +27,7 @@ import (
 )
 
 const (
-	codexUserAgent             = "codex-tui/0.153.4 (Ubuntu 24.4.0; x86_64) dumb (codex-tui; 0.153.4)"
+	codexUserAgent             = "codex-tui/0.153.4 (Ubuntu 22.4.0; x86_64) vscode/1.135.0 (codex-tui; 0.153.4)"
 	codexOriginator            = "codex-tui"
 	codexVersion               = "0.153.4"
 	codexBetaFeatures          = "remote_compaction_v2"

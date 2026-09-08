@@ -8,7 +8,7 @@ Codex CLI 0.153.4 TUI，而不是暴露各下游客户端的系统、版本和�
 
 当前固定应用身份为：
 
-- `User-Agent: codex-tui/0.153.4 (Ubuntu 24.4.0; x86_64) dumb (codex-tui; 0.153.4)`
+- `User-Agent: codex-tui/0.153.4 (Ubuntu 22.4.0; x86_64) vscode/1.135.0 (codex-tui; 0.153.4)`
 - `Originator: codex-tui`
 - 缺失时补 `Version: 0.153.4`
 - 缺失时补 `X-Codex-Beta-Features: remote_compaction_v2`
@@ -19,6 +19,12 @@ Codex CLI 0.153.4 TUI，而不是暴露各下游客户端的系统、版本和�
 > release）可正常服务，证明门槛在应用层版本字串。TLS ClientHello 沿用
 > 0.147.0 捕获基线未换——reqwest/OpenSSL 与 rustls 栈在 0.147→0.153
 > 之间无变化，且该门控与 TLS 指纹无关。
+>
+> 2026-09-09：UA 平台/终端段从 `(Ubuntu 24.4.0; x86_64) dumb` 改为
+> `(Ubuntu 22.4.0; x86_64) vscode/1.135.0`。依据 `usage_logs.user_agent`
+> 近 14 天真实 codex-tui 0.153.4 流量，`TERM=dumb` 在真实种群中不存在
+> （服务器/CI 特征），该字符串是观测到请求量最高的真实 Linux 0.153.4 UA；
+> 保持 Linux 平台与 reqwest/OpenSSL ClientHello 基线自洽。
 
 OAuth 请求默认强制使用这一组身份；管理员显式设置
 `codex-header-defaults.user-agent` 或开启 `disable-codex-cloaking` 时仍按配置处理。
