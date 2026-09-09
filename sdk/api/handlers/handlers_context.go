@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
 	"golang.org/x/net/context"
 )
 
@@ -75,6 +76,23 @@ func WithPinnedAuthID(ctx context.Context, authID string) context.Context {
 		ctx = context.Background()
 	}
 	return context.WithValue(ctx, pinnedAuthContextKey{}, authID)
+}
+
+// PoolPinAccountHeader is the internal request header that pins execution to a specific
+// auth ID. The value space is the auth ID: the auth JSON file path relative to auths/
+// (e.g. "codex-foo.json").
+const PoolPinAccountHeader = "X-Pool-Pin-Account"
+
+// WithPoolPinFromRequest returns a child context pinned to the auth ID from the
+// X-Pool-Pin-Account header when cfg.AllowPoolPinHeader is enabled; otherwise it
+// returns ctx unchanged.
+//
+// ice divergence: pool pin header is local-only (docs/ice-divergences.md #13).
+func WithPoolPinFromRequest(ctx context.Context, cfg *config.SDKConfig, c *gin.Context) context.Context {
+	if cfg == nil || !cfg.AllowPoolPinHeader || c == nil {
+		return ctx
+	}
+	return WithPinnedAuthID(ctx, c.GetHeader(PoolPinAccountHeader))
 }
 
 // WithSelectedAuthIDCallback returns a child context that receives the selected auth ID.

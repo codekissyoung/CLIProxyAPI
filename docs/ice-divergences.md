@@ -116,3 +116,26 @@ Key conflict sites are tagged in code with `// ice divergence: ...`.
 
 12. **AGENTS.md Deployment Notes / Merge Policy sections** — ice-only;
     upstream's new convention bullets merge in above them.
+
+## API surface (sdk/api/handlers, internal/logging, internal/config)
+
+13. **Pool auth pin + auth attribution headers** (2026-09-09;
+    `internal/config/sdk_config.go` `AllowPoolPinHeader`,
+    `sdk/api/handlers/handlers_context.go` `WithPoolPinFromRequest`,
+    `sdk/api/handlers/openai/openai_responses_handlers.go`,
+    `sdk/api/handlers/handlers.go` `requestExecutionMetadata`,
+    `sdk/api/handlers/header_filter.go`,
+    `internal/logging/cpa_trace.go`,
+    `config.example.yaml` `allow-pool-pin-header`;
+    pinned by `handlers_pool_pin_test.go`,
+    `openai_responses_pool_pin_test.go`, `cpa_trace_test.go`)
+    When `allow-pool-pin-header: true`, the internal
+    `X-Pool-Pin-Account: <auth.ID>` request header pins POST /v1/responses
+    (stream and non-stream) to a specific auth ID (auth JSON path relative to
+    auths/); unknown IDs fail deterministically with `auth_not_found`, no
+    fallback. Every plain-HTTP response also carries `X-Pool-Account:
+    <auth.ID>` of the auth that actually served the request (last selection
+    wins across failover), emitted by the CPA trace commit-time writer and
+    reserved against upstream spoofing in `cpaReservedResponseHeaders`.
+    Local operational tooling for ai-relay pool testing; upstream has no
+    equivalent — keep on merge.

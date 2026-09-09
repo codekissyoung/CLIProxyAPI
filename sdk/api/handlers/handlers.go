@@ -186,6 +186,18 @@ func requestExecutionMetadata(ctx context.Context) map[string]any {
 		if traceCallback := logging.GinCPATraceIDCallback(ginCtx); traceCallback != nil {
 			meta[coreexecutor.SelectedAuthIndexCallbackMetadataKey] = traceCallback
 		}
+		if poolCallback := logging.GinCPAPoolAccountCallback(ginCtx); poolCallback != nil {
+			// ice divergence: X-Pool-Account attribution header is local-only
+			// (docs/ice-divergences.md #13).
+			if existing, ok := meta[coreexecutor.SelectedAuthCallbackMetadataKey].(func(string)); ok && existing != nil {
+				meta[coreexecutor.SelectedAuthCallbackMetadataKey] = func(authID string) {
+					existing(authID)
+					poolCallback(authID)
+				}
+			} else {
+				meta[coreexecutor.SelectedAuthCallbackMetadataKey] = poolCallback
+			}
+		}
 	}
 	if executionSessionID := executionSessionIDFromContext(ctx); executionSessionID != "" {
 		meta[coreexecutor.ExecutionSessionMetadataKey] = executionSessionID

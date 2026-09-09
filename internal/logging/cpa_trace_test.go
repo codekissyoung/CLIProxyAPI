@@ -113,3 +113,84 @@ func TestCPATraceIDConcurrentSelectionAndResponseCommit(t *testing.T) {
 		}
 	}
 }
+
+func TestCPATraceIDMiddlewareEmitsPoolAccountHeader(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	engine.Use(CPATraceIDMiddleware())
+	engine.GET("/selected", func(c *gin.Context) {
+		SetGinRequestID(c, "1234abcd")
+		SetGinCPATraceID(c, "auth-index")
+		SetGinCPAPoolAccount(c, "codex-foo.json")
+		c.Status(http.StatusOK)
+	})
+	engine.GET("/unselected", func(c *gin.Context) {
+		SetGinRequestID(c, "1234abcd")
+		c.Status(http.StatusOK)
+	})
+	engine.GET("/committed", func(c *gin.Context) {
+		SetGinRequestID(c, "1234abcd")
+		c.Writer.WriteHeaderNow()
+		SetGinCPAPoolAccount(c, "codex-foo.json")
+	})
+	engine.GET("/failover", func(c *gin.Context) {
+		SetGinRequestID(c, "1234abcd")
+		SetGinCPAPoolAccount(c, "codex-first.json")
+		SetGinCPAPoolAccount(c, "codex-last.json")
+		c.Status(http.StatusOK)
+	})
+
+	t.Run("writes pool account alongside trace", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		engine.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/selected", nil))
+
+		if got := recorder.Header().Get(CPAPoolAccountHeader); got != "codex-foo.json" {
+			t.Fatalf("pool account header = %q, want %q", got, "codex-foo.json")
+		}
+		if got := recorder.Header().Get(CPATraceIDHeader); got == "" {
+			t.Fatal("trace ID header missing")
+		}
+	})
+
+	t.Run("skips header when no auth was selected", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		engine.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/unselected", nil))
+
+		if got := recorder.Header().Get(CPAPoolAccountHeader); got != "" {
+			t.Fatalf("pool account header = %q, want empty", got)
+		}
+	})
+
+	t.Run("skips committed response", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		engine.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/committed", nil))
+
+		if got := recorder.Header().Get(CPAPoolAccountHeader); got != "" {
+			t.Fatalf("pool account header = %q, want empty", got)
+		}
+	})
+
+	t.Run("last selected auth wins", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		engine.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/failover", nil))
+
+		if got := recorder.Header().Get(CPAPoolAccountHeader); got != "codex-last.json" {
+			t.Fatalf("pool account header = %q, want %q", got, "codex-last.json")
+		}
+	})
+}
+
+func TestGinCPAPoolAccountCallbackSurvivesContextRelease(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ginCtx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ginCtx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+
+	callback := GinCPAPoolAccountCallback(ginCtx)
+	if callback == nil {
+		t.Fatal("pool account callback is nil")
+	}
+	callback("  codex-foo.json  ")
+	if got := GetGinCPAPoolAccount(ginCtx); got != "codex-foo.json" {
+		t.Fatalf("pool account = %q, want trimmed %q", got, "codex-foo.json")
+	}
+}

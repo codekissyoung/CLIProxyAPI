@@ -11,6 +11,9 @@ import (
 // CPATraceIDHeader is the downstream response header used to correlate requests with selected credentials.
 const CPATraceIDHeader = "X-CPA-TRACE-ID"
 
+// CPAPoolAccountHeader is the downstream response header identifying the auth ID that served the request.
+const CPAPoolAccountHeader = "X-Pool-Account"
+
 const ginCPATraceStateKey = "__cpa_trace_state__"
 
 // FormatCPATraceID builds a CPA trace ID from the selection time, auth index, and request ID.
@@ -26,6 +29,7 @@ func FormatCPATraceID(selectedAt time.Time, authIndex, requestID string) string 
 type cpaTraceState struct {
 	mu      sync.RWMutex
 	traceID string
+	authID  string
 }
 
 func (s *cpaTraceState) set(traceID string) {
@@ -45,6 +49,25 @@ func (s *cpaTraceState) get() string {
 	traceID := s.traceID
 	s.mu.RUnlock()
 	return traceID
+}
+
+func (s *cpaTraceState) setAuthID(authID string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.authID = strings.TrimSpace(authID)
+	s.mu.Unlock()
+}
+
+func (s *cpaTraceState) getAuthID() string {
+	if s == nil {
+		return ""
+	}
+	s.mu.RLock()
+	authID := s.authID
+	s.mu.RUnlock()
+	return authID
 }
 
 func ginCPATraceState(c *gin.Context) *cpaTraceState {
@@ -102,6 +125,38 @@ func GetGinCPATraceID(c *gin.Context) string {
 	return state.get()
 }
 
+// GinCPAPoolAccountCallback returns a callback recording the selected auth ID
+// for the current request. It is safe to invoke after the Gin context is released.
+func GinCPAPoolAccountCallback(c *gin.Context) func(string) {
+	state := ginCPATraceState(c)
+	if state == nil {
+		return nil
+	}
+	return func(authID string) {
+		state.setAuthID(authID)
+	}
+}
+
+// SetGinCPAPoolAccount stores the selected auth ID until the downstream response headers are committed.
+func SetGinCPAPoolAccount(c *gin.Context, authID string) {
+	if callback := GinCPAPoolAccountCallback(c); callback != nil {
+		callback(authID)
+	}
+}
+
+// GetGinCPAPoolAccount returns the auth ID stored for the current request.
+func GetGinCPAPoolAccount(c *gin.Context) string {
+	if c == nil {
+		return ""
+	}
+	value, exists := c.Get(ginCPATraceStateKey)
+	if !exists {
+		return ""
+	}
+	state, _ := value.(*cpaTraceState)
+	return state.getAuthID()
+}
+
 // CPATraceIDMiddleware injects a stored trace ID immediately before response headers are committed.
 func CPATraceIDMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -147,5 +202,8 @@ func (w *cpaTraceResponseWriter) applyTraceHeader() {
 	}
 	if traceID := w.state.get(); traceID != "" {
 		w.ResponseWriter.Header().Set(CPATraceIDHeader, traceID)
+	}
+	if authID := w.state.getAuthID(); authID != "" {
+		w.ResponseWriter.Header().Set(CPAPoolAccountHeader, authID)
 	}
 }

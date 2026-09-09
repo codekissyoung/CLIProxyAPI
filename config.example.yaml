@@ -141,6 +141,12 @@ force-model-prefix: false
 # Default is false (disabled).
 passthrough-headers: false
 
+# When true, honor the internal X-Pool-Pin-Account request header on POST /v1/responses
+# to pin execution to a specific auth ID (the auth JSON file path relative to auths/,
+# e.g. "codex-foo.json"). An unknown ID fails deterministically with auth_not_found.
+# Default is false (header ignored).
+allow-pool-pin-header: false
+
 # Number of additional credential retry rounds after the first round exhausts
 # its eligible credentials. Round 0 is the initial round; round r only admits
 # credentials whose effective request-retry is at least r. Explicit non-negative

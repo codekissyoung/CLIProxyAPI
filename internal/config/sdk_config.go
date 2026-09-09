@@ -58,6 +58,10 @@ type SDKConfig struct {
 	// Default is false (disabled).
 	PassthroughHeaders bool `yaml:"passthrough-headers" json:"passthrough-headers"`
 
+	// AllowPoolPinHeader controls whether the internal X-Pool-Pin-Account request header
+	// pins /v1/responses execution to a specific auth ID. Default is false (header ignored).
+	AllowPoolPinHeader bool `yaml:"allow-pool-pin-header" json:"allow-pool-pin-header"`
+
 	// Streaming configures server-side streaming behavior (keep-alives and safe bootstrap retries).
 	Streaming StreamingConfig `yaml:"streaming" json:"streaming"`
 
