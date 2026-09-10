@@ -60,6 +60,22 @@ Key conflict sites are tagged in code with `// ice divergence: ...`.
    ice defaults `sessionAffinityTTL` to 24h (upstream example: 1h).
    Pinned by `TestNormalizedRoutingRuntimeStateDefaultsAffinityTTLTo24Hours`.
 
+14. **Overload failures preserve session bindings** (2026-09-10;
+    `selector.go` `SessionAffinitySelector.OnResult`,
+    `conductor_cooldown.go` `isOverloadResultError`;
+    pinned by `selector_overload_test.go`)
+    Upstream releases explicit and LCP session bindings on every non-exempt
+    failure. ice keeps the binding when the failure is an upstream
+    capacity/overload rejection (`server_is_overloaded` code or a 502/503/504
+    whose message says the server is overloaded; 429 rate limiting is
+    deliberately excluded and keeps quota semantics). Production evidence:
+    OpenAI peak-hour `server_is_overloaded` storms re-homed one session 28
+    times in 13 minutes, losing the prefix cache on every hop and amplifying
+    the overload. The conductor cooldown still marks the overloaded credential
+    unavailable with `NextRetryAfter`, so the pick path temporarily routes the
+    session through a temp account and the existing `home_recovered` path
+    migrates it back on recovery.
+
 ## Executors (internal/runtime/executor)
 
 8. **Per-auth+proxy Codex transport cache** (`codex_executor_request.go`,

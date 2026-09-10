@@ -1525,6 +1525,42 @@ func isConnectionLifecycleMessage(message string) bool {
 	return false
 }
 
+// isOverloadResultError reports upstream capacity/overload rejections: the
+// OpenAI `server_is_overloaded` family surfaced as 502/503/504, or a 5xx
+// gateway-family status whose message explicitly says the server is
+// overloaded. These are transient per-request capacity signals, distinct from
+// 429 quota/rate-limit accounting, which keeps its own cooldown semantics.
+//
+// ice divergence: SessionAffinitySelector.OnResult consults this classifier to
+// keep session bindings on overload failures; upstream releases bindings on
+// every non-exempt failure.
+func isOverloadResultError(err *Error) bool {
+	if err == nil {
+		return false
+	}
+	// Rate limiting is quota accounting, not a capacity signal.
+	if statusCodeFromResult(err) == http.StatusTooManyRequests {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(err.Code), "server_is_overloaded") {
+		return true
+	}
+	message := strings.ToLower(err.Message)
+	if message == "" {
+		return false
+	}
+	// The raw upstream body often travels inside Message, so the structured
+	// error code may only appear embedded in the JSON payload.
+	if strings.Contains(message, "server_is_overloaded") {
+		return true
+	}
+	switch statusCodeFromResult(err) {
+	case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return strings.Contains(message, "overloaded")
+	}
+	return false
+}
+
 func isUnauthorizedError(err error) bool {
 	if err == nil {
 		return false

@@ -1335,6 +1335,19 @@ func (s *SessionAffinitySelector) OnResult(res Result) {
 		return
 	}
 
+	// ice divergence: overloaded/capacity failures preserve session bindings.
+	// An overload rejection is a session-level transient capacity signal, not
+	// evidence that the home credential is unhealthy. Releasing the binding
+	// here produced production rebind storms (one session re-homed 28 times in
+	// 13 minutes, losing its prefix cache on every hop and amplifying the
+	// overload). The conductor cooldown already marks the overloaded credential
+	// unavailable with NextRetryAfter, so the pick path temporarily routes the
+	// session through a temp account and the existing home_recovered path
+	// migrates it back once the home credential recovers.
+	if res.Error != nil && isOverloadResultError(res.Error) {
+		return
+	}
+
 	// LCP bindings are independent from explicit harness bindings. A successful
 	// extension is recorded as a new sequence while credential-attributed failures
 	// only remove the exact sequence that was attempted.
