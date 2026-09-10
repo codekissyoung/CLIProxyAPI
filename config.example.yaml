@@ -216,6 +216,17 @@ video-result-auth-cache-ttl: "3h"
 # Set to 0 to disable the standalone limiter. This does not apply in Home mode.
 xai-oauth-max-concurrency: 0
 
+# Maximum concurrent in-flight requests per credential across every provider,
+# enforced as a selection-time capacity gate: a credential at its limit is
+# skipped (without releasing session-affinity bindings) until a slot frees,
+# so sessions temporarily fail over and migrate back once capacity returns.
+# A streaming request holds its slot until the stream ends.
+# 0 disables the gate (default). Per-credential override: set
+# attributes["concurrency"] in the auth JSON file ("0" = unlimited for that
+# account; missing/invalid values fall back to this global default).
+# Does not apply in Home mode.
+# account-concurrency-limit: 0
+
 # Quota exceeded behavior
 quota-exceeded:
   switch-project: true # Whether to automatically switch to another project when a quota is exceeded

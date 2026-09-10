@@ -482,7 +482,8 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 	attempted := make(map[string]struct{})
 	var lastErr error
 	// ice divergence: xAI OAuth concurrency gating (concurrencyBusy /
-	// releaseConcurrency); keep alongside upstream's upstreamErr tracking.
+	// releaseConcurrency) composed with the account in-flight capacity tracker
+	// (acquireExecutionConcurrency); keep alongside upstream's upstreamErr tracking.
 	concurrencyBusy := false
 	var upstreamErr error
 	for {
@@ -508,7 +509,7 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 			}
 			return cliproxyexecutor.Response{}, errPick
 		}
-		releaseConcurrency, acquiredConcurrency := m.acquireXAIOAuthConcurrency(auth)
+		releaseConcurrency, acquiredConcurrency := m.acquireExecutionConcurrency(auth)
 		if !acquiredConcurrency {
 			tried[auth.ID] = struct{}{}
 			concurrencyBusy = true
@@ -716,7 +717,8 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 	attempted := make(map[string]struct{})
 	var lastErr error
 	// ice divergence: xAI OAuth concurrency gating (concurrencyBusy /
-	// releaseConcurrency); keep alongside upstream's upstreamErr tracking.
+	// releaseConcurrency) composed with the account in-flight capacity tracker
+	// (acquireExecutionConcurrency); keep alongside upstream's upstreamErr tracking.
 	concurrencyBusy := false
 	var upstreamErr error
 	for {
@@ -742,7 +744,7 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 			}
 			return cliproxyexecutor.Response{}, errPick
 		}
-		releaseConcurrency, acquiredConcurrency := m.acquireXAIOAuthConcurrency(auth)
+		releaseConcurrency, acquiredConcurrency := m.acquireExecutionConcurrency(auth)
 		if !acquiredConcurrency {
 			tried[auth.ID] = struct{}{}
 			concurrencyBusy = true
@@ -955,7 +957,8 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 	attempted := make(map[string]struct{})
 	var lastErr error
 	// ice divergence: xAI OAuth concurrency gating (concurrencyBusy /
-	// releaseConcurrency); keep alongside upstream's upstreamErr tracking.
+	// releaseConcurrency) composed with the account in-flight capacity tracker
+	// (acquireExecutionConcurrency); keep alongside upstream's upstreamErr tracking.
 	concurrencyBusy := false
 	var upstreamErr error
 	var roundTiming homeRetryRoundTiming
@@ -1020,7 +1023,7 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 		releaseConcurrency := func() {}
 		if !homeMode {
 			var acquiredConcurrency bool
-			releaseConcurrency, acquiredConcurrency = m.acquireXAIOAuthConcurrency(auth)
+			releaseConcurrency, acquiredConcurrency = m.acquireExecutionConcurrency(auth)
 			if !acquiredConcurrency {
 				tried[auth.ID] = struct{}{}
 				concurrencyBusy = true

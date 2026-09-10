@@ -76,6 +76,31 @@ Key conflict sites are tagged in code with `// ice divergence: ...`.
     session through a temp account and the existing `home_recovered` path
     migrates it back on recovery.
 
+15. **Per-account in-flight capacity gate** (2026-09-11;
+    `credential_capacity.go`, `selector.go` `collectAvailableByPriority`,
+    `conductor_selection.go` `availableAuthsForRouteModelWithPriorityMode`,
+    `scheduler.go` `scheduledAuthPredicate`,
+    `conductor_execution.go` `acquireExecutionConcurrency`,
+    `internal/config` `account-concurrency-limit`;
+    pinned by `credential_capacity_test.go`,
+    `internal/config/account_concurrency_test.go`)
+    sub2api-style `accounts.concurrency`: a credential holding its configured
+    number of in-flight requests is skipped at selection time (no error, no
+    unbind) until a slot frees; session affinity treats a saturated home as
+    temporarily unavailable and the existing home_recovered path migrates the
+    session back. The counter is maintained per execution attempt in the
+    conductor (composed into the xAI gate acquisition so every existing
+    release site keeps its exact-once lifecycle; streams hold the slot until
+    the channel drains). Global default via `account-concurrency-limit`
+    (0 = disabled, the default, preserving legacy behavior); per-credential
+    override via auth-file `attributes["concurrency"]` ("0" = unlimited,
+    invalid values fall back to the global default). The gate hooks only the
+    selection funnels (selector filter, conductor candidate filter, scheduler
+    fast-path predicate) — deliberately NOT `isAuthBlockedForModel`, which is
+    also consulted mid-attempt by `filterExecutionModels` and would self-block
+    the attempt holding the slot. No-op under Home mode (Home has its own
+    concurrency lifecycle). Upstream has no equivalent.
+
 ## Executors (internal/runtime/executor)
 
 8. **Per-auth+proxy Codex transport cache** (`codex_executor_request.go`,

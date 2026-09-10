@@ -81,6 +81,13 @@ type Config struct {
 	// Set to 0 or a negative value to disable the standalone limiter.
 	XAIOAuthMaxConcurrency int `yaml:"xai-oauth-max-concurrency" json:"xai-oauth-max-concurrency"`
 
+	// AccountConcurrencyLimit caps concurrent in-flight requests per credential across
+	// every provider as a selection-time capacity gate: a credential at its limit is
+	// skipped until a slot frees. 0 leaves the gate disabled for credentials without an
+	// explicit override. Per-credential override: auth file attributes["concurrency"]
+	// ("0" marks the account unlimited; invalid values fall back to this global default).
+	AccountConcurrencyLimit int `yaml:"account-concurrency-limit" json:"account-concurrency-limit"`
+
 	// RequestRetry defines the number of additional credential retry rounds after
 	// the first round has exhausted its eligible credentials.
 	RequestRetry int `yaml:"request-retry" json:"request-retry"`

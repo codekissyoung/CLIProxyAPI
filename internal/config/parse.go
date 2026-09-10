@@ -90,6 +90,9 @@ func ParseConfigBytes(data []byte) (*Config, error) {
 	if cfg.XAIOAuthMaxConcurrency < 0 {
 		cfg.XAIOAuthMaxConcurrency = 0
 	}
+	if cfg.AccountConcurrencyLimit < 0 {
+		cfg.AccountConcurrencyLimit = 0
+	}
 
 	cfg.NormalizePluginsConfig()
 	if errResolvePluginsDir := cfg.ResolvePluginsDir(); errResolvePluginsDir != nil && cfg.Plugins.Enabled {
