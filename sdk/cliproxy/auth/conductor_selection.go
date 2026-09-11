@@ -473,14 +473,6 @@ func (m *Manager) availableAuthsForRouteModelWithPriorityMode(auths []*Auth, pro
 		checkModel := m.selectionModelForAuth(candidate, routeModel)
 		blocked, reason, next := isAuthBlockedForModel(candidate, checkModel, now)
 		if !blocked {
-			// ice divergence: per-account in-flight capacity gate (sub2api-style
-			// accounts.concurrency), applied only at selection time. A credential
-			// holding its configured concurrency limit is temporarily skipped so
-			// selection fails over without releasing session bindings; freed slots
-			// make it selectable again (affinity home_recovered migrates back).
-			if accountCapacityBlocked(candidate) {
-				continue
-			}
 			priority := authPriority(candidate)
 			availableByPriority[priority] = append(availableByPriority[priority], candidate)
 			continue

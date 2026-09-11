@@ -662,12 +662,6 @@ func scheduledAuthPredicate(eligibility authSelectionEligibility, tried map[stri
 				return false
 			}
 		}
-		// ice divergence: apply the per-account in-flight capacity gate to the
-		// scheduler fast path as well, keeping one shared predicate across all
-		// selection stacks.
-		if accountCapacityBlocked(entry.auth) {
-			return false
-		}
 		return true
 	}
 }

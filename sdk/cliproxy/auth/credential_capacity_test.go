@@ -2,12 +2,25 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
 )
+
+// mustAcquireAccountCapacity reserves a test slot and fails the test when the
+// admission gate rejects it.
+func mustAcquireAccountCapacity(t *testing.T, auth *Auth) func() {
+	t.Helper()
+	release, ok := tryAcquireAccountCapacity(auth)
+	if !ok {
+		t.Fatalf("tryAcquireAccountCapacity(%s) rejected, want admitted", auth.ID)
+	}
+	return release
+}
 
 func setAccountConcurrencyLimitForTest(t *testing.T, limit int) {
 	t.Helper()
@@ -61,7 +74,7 @@ func TestAccountConcurrencyGateDisabledByDefault(t *testing.T) {
 	}
 
 	// Tracking is a no-op while the gate is disabled.
-	release := trackAuthInFlight(auths[0])
+	release := mustAcquireAccountCapacity(t, auths[0])
 	release()
 	if got := accountInFlightCount("cap-off-a"); got != 0 {
 		t.Fatalf("in-flight(cap-off-a) = %d, want 0 with the gate disabled", got)
@@ -72,120 +85,56 @@ func TestAccountConcurrencyGateFullFallsToNext(t *testing.T) {
 	setAccountConcurrencyLimitForTest(t, 1)
 
 	// Fill-first keeps the post-release pick deterministic (round-robin would
-	// have advanced past auth-a during the saturated pick).
-	selector := NewSessionAffinitySelector(&FillFirstSelector{})
-	defer selector.Stop()
+	// have advanced past auth-a during the saturated attempt).
+	manager := newCapacityTestManager(t, &FillFirstSelector{}, "cap-full-a", "cap-full-b")
 
-	authA := &Auth{ID: "cap-full-a"}
-	authB := &Auth{ID: "cap-full-b"}
-	auths := []*Auth{authA, authB}
-
-	release := trackAuthInFlight(authA)
+	release := mustAcquireAccountCapacity(t, &Auth{ID: "cap-full-a"})
 	if got := accountInFlightCount("cap-full-a"); got != 1 {
 		t.Fatalf("in-flight(cap-full-a) = %d, want 1", got)
 	}
 
-	auth, errPick := selector.Pick(context.Background(), "codex", "gpt-5.4", cliproxyexecutor.Options{}, auths)
-	if errPick != nil || auth == nil {
-		t.Fatalf("Pick() with full auth-a error = %v", errPick)
+	// Admission rejects the saturated credential and the request fails over to
+	// the next candidate within the same Execute call.
+	response, errExecute := manager.Execute(context.Background(), []string{"codex"}, cliproxyexecutor.Request{Model: "cap-model"}, cliproxyexecutor.Options{})
+	if errExecute != nil {
+		t.Fatalf("Execute() with full auth-a error = %v", errExecute)
 	}
-	if auth.ID != "cap-full-b" {
-		t.Fatalf("Pick() with full auth-a = %q, want cap-full-b", auth.ID)
-	}
-
-	release()
-	auth, errPick = selector.Pick(context.Background(), "codex", "gpt-5.4", cliproxyexecutor.Options{}, auths)
-	if errPick != nil || auth == nil {
-		t.Fatalf("Pick() after release error = %v", errPick)
-	}
-	if auth.ID != "cap-full-a" {
-		t.Fatalf("Pick() after release = %q, want cap-full-a", auth.ID)
-	}
-}
-
-func TestAccountConcurrencyGateAffinityHomeFullTempThenRecover(t *testing.T) {
-	setAccountConcurrencyLimitForTest(t, 1)
-
-	selector := NewSessionAffinitySelector(&RoundRobinSelector{})
-	defer selector.Stop()
-
-	authA := &Auth{ID: "cap-home-a"}
-	authB := &Auth{ID: "cap-home-b"}
-	auths := []*Auth{authA, authB}
-
-	pick := func() string {
-		t.Helper()
-		auth, errPick := selector.Pick(context.Background(), "claude", "claude-3-7-sonnet", claudeAffinityTestOptions(), auths)
-		if errPick != nil || auth == nil {
-			t.Fatalf("Pick() error = %v", errPick)
-		}
-		return auth.ID
-	}
-
-	if got := pick(); got != "cap-home-a" {
-		t.Fatalf("cold Pick() = %q, want cap-home-a", got)
-	}
-
-	// The home credential saturates: the session temp-fails over but the home
-	// binding must stay intact (same semantics as the overload divergence).
-	release := trackAuthInFlight(authA)
-	if got := pick(); got != "cap-home-b" {
-		t.Fatalf("Pick() with full home = %q, want cap-home-b temporary fallback", got)
-	}
-	if bound, ok := selector.cache.Get("claude::claude:sess-1"); !ok || bound != "cap-home-a" {
-		t.Fatalf("home binding = %q, %v; want cap-home-a, true", bound, ok)
+	if got := string(response.Payload); got != "cap-full-b" {
+		t.Fatalf("Execute() with full auth-a served by %q, want cap-full-b", got)
 	}
 
 	release()
-	if got := pick(); got != "cap-home-a" {
-		t.Fatalf("Pick() after slot freed = %q, want cap-home-a (home_recovered)", got)
+	response, errExecute = manager.Execute(context.Background(), []string{"codex"}, cliproxyexecutor.Request{Model: "cap-model"}, cliproxyexecutor.Options{})
+	if errExecute != nil {
+		t.Fatalf("Execute() after release error = %v", errExecute)
+	}
+	if got := string(response.Payload); got != "cap-full-a" {
+		t.Fatalf("Execute() after release served by %q, want cap-full-a", got)
 	}
 }
 
 func TestAccountConcurrencyPerAuthOverride(t *testing.T) {
 	setAccountConcurrencyLimitForTest(t, 1)
 
-	selector := NewSessionAffinitySelector(&RoundRobinSelector{})
-	defer selector.Stop()
-
-	// The attribute raises auth-a's limit above the global default: one
-	// in-flight request does not saturate it, two do.
+	// The attribute raises the account's limit above the global default: two
+	// reservations fit, the third is rejected atomically.
 	authA := &Auth{ID: "cap-ovr-a", Attributes: map[string]string{AttributeConcurrency: "2"}}
-	authB := &Auth{ID: "cap-ovr-b"}
-	auths := []*Auth{authA, authB}
-
-	releaseOne := trackAuthInFlight(authA)
+	releaseOne := mustAcquireAccountCapacity(t, authA)
 	defer releaseOne()
-	auth, errPick := selector.Pick(context.Background(), "codex", "gpt-5.4", cliproxyexecutor.Options{}, auths)
-	if errPick != nil || auth == nil {
-		t.Fatalf("Pick() error = %v", errPick)
-	}
-	if auth.ID != "cap-ovr-a" {
-		t.Fatalf("Pick() with headroom = %q, want cap-ovr-a", auth.ID)
-	}
-
-	releaseTwo := trackAuthInFlight(authA)
+	releaseTwo := mustAcquireAccountCapacity(t, authA)
 	defer releaseTwo()
-	auth, errPick = selector.Pick(context.Background(), "codex", "gpt-5.4", cliproxyexecutor.Options{}, auths)
-	if errPick != nil || auth == nil {
-		t.Fatalf("Pick() with saturated override error = %v", errPick)
-	}
-	if auth.ID != "cap-ovr-b" {
-		t.Fatalf("Pick() with saturated override = %q, want cap-ovr-b", auth.ID)
+	if releaseThree, okThree := tryAcquireAccountCapacity(authA); okThree || releaseThree != nil {
+		t.Fatal("third acquire admitted beyond the per-auth override limit")
 	}
 
-	// An explicit "0" attribute opts the account out of the gate entirely.
+	// An explicit "0" attribute opts the account out of the gate entirely:
+	// admission succeeds no matter how much load the counter already shows.
 	authC := &Auth{ID: "cap-ovr-c", Attributes: map[string]string{AttributeConcurrency: "0"}}
 	setAccountInFlightForTest(t, "cap-ovr-c", 5)
-	if accountCapacityBlocked(authC) {
-		t.Fatal("accountCapacityBlocked() = true for an unlimited account")
-	}
-	auth, errPick = selector.Pick(context.Background(), "codex", "gpt-5.4", cliproxyexecutor.Options{}, []*Auth{authC})
-	if errPick != nil || auth == nil {
-		t.Fatalf("Pick() unlimited account error = %v", errPick)
-	}
-	if auth.ID != "cap-ovr-c" {
-		t.Fatalf("Pick() unlimited account = %q, want cap-ovr-c", auth.ID)
+	releaseUnlimited := mustAcquireAccountCapacity(t, authC)
+	releaseUnlimited()
+	if got := accountInFlightCount("cap-ovr-c"); got != 5 {
+		t.Fatalf("in-flight(cap-ovr-c) = %d, want 5 (unlimited accounts are not tracked)", got)
 	}
 }
 
@@ -228,15 +177,31 @@ func TestEffectiveAccountConcurrencyLimitFallback(t *testing.T) {
 	}
 }
 
-func TestTrackAuthInFlightLifecycle(t *testing.T) {
-	setAccountConcurrencyLimitForTest(t, 3)
+func TestTryAcquireAccountCapacityAdmission(t *testing.T) {
+	setAccountConcurrencyLimitForTest(t, 2)
 
 	auth := &Auth{ID: "cap-life-a"}
-	releaseOne := trackAuthInFlight(auth)
-	releaseTwo := trackAuthInFlight(auth)
-	if got := accountInFlightCount("cap-life-a"); got != 2 {
-		t.Fatalf("in-flight = %d, want 2", got)
+	releaseOne, okOne := tryAcquireAccountCapacity(auth)
+	if !okOne {
+		t.Fatal("first acquire rejected, want admitted")
 	}
+	releaseTwo, okTwo := tryAcquireAccountCapacity(auth)
+	if !okTwo {
+		t.Fatal("second acquire rejected, want admitted")
+	}
+
+	// The third reservation must be rejected atomically at the limit.
+	releaseThree, okThree := tryAcquireAccountCapacity(auth)
+	if okThree || releaseThree != nil {
+		t.Fatal("third acquire admitted beyond the limit")
+	}
+	if got := accountInFlightCount("cap-life-a"); got != 2 {
+		t.Fatalf("in-flight after rejected acquire = %d, want 2 (no phantom slot)", got)
+	}
+	if got := accountInFlightHighWater("cap-life-a"); got != 2 {
+		t.Fatalf("high-water = %d, want 2", got)
+	}
+
 	releaseOne()
 	if got := accountInFlightCount("cap-life-a"); got != 1 {
 		t.Fatalf("in-flight after one release = %d, want 1", got)
@@ -255,16 +220,88 @@ func TestTrackAuthInFlightLifecycle(t *testing.T) {
 	if exists {
 		t.Fatal("in-flight map entry leaked after full release")
 	}
+
+	// A freed slot is reservable again.
+	releaseFour, okFour := tryAcquireAccountCapacity(auth)
+	if !okFour {
+		t.Fatal("acquire after release rejected, want admitted")
+	}
+	releaseFour()
+}
+
+// 50 goroutines race for limit=5 slots on one credential behind a channel
+// barrier. The high-water mark must never exceed the limit and the counter
+// must drain to zero.
+func TestTryAcquireAccountCapacityConcurrentStorm(t *testing.T) {
+	setAccountConcurrencyLimitForTest(t, 5)
+
+	auth := &Auth{ID: "cap-storm-a"}
+	const contenders = 50
+	start := make(chan struct{})
+	outcome := make(chan bool, contenders) // true = acquired
+	var wg sync.WaitGroup
+	for range contenders {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			release, ok := tryAcquireAccountCapacity(auth)
+			if ok {
+				release()
+			}
+			outcome <- ok
+		}()
+	}
+	close(start)
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("concurrent storm deadlocked")
+	}
+
+	acquired := 0
+	for range contenders {
+		if <-outcome {
+			acquired++
+		}
+	}
+	if acquired == 0 {
+		t.Fatal("no contender ever acquired a slot")
+	}
+	if got := accountInFlightHighWater("cap-storm-a"); got > 5 {
+		t.Fatalf("high-water = %d, exceeds limit 5", got)
+	}
+	if got := accountInFlightCount("cap-storm-a"); got != 0 {
+		t.Fatalf("in-flight after storm = %d, want 0 (leak)", got)
+	}
 }
 
 // capacityTestExecutor executes on codex and reports the serving auth ID.
 type capacityTestExecutor struct {
 	streamChunks chan cliproxyexecutor.StreamChunk
+	// Optional blocking mode for admission stress tests: Execute signals
+	// started and holds the request until releaseAll closes.
+	started    chan string
+	releaseAll chan struct{}
 }
 
 func (e *capacityTestExecutor) Identifier() string { return "codex" }
 
-func (e *capacityTestExecutor) Execute(_ context.Context, auth *Auth, _ cliproxyexecutor.Request, _ cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+func (e *capacityTestExecutor) Execute(ctx context.Context, auth *Auth, _ cliproxyexecutor.Request, _ cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+	if e.releaseAll != nil {
+		e.started <- auth.ID
+		select {
+		case <-ctx.Done():
+			return cliproxyexecutor.Response{}, ctx.Err()
+		case <-e.releaseAll:
+		}
+	}
 	return cliproxyexecutor.Response{Payload: []byte(auth.ID)}, nil
 }
 
@@ -301,7 +338,7 @@ func TestManagerExecuteAccountConcurrencySchedulerFastPath(t *testing.T) {
 	setAccountConcurrencyLimitForTest(t, 1)
 
 	manager := newCapacityTestManager(t, &RoundRobinSelector{}, "cap-fast-a", "cap-fast-b")
-	release := trackAuthInFlight(&Auth{ID: "cap-fast-a"})
+	release := mustAcquireAccountCapacity(t, &Auth{ID: "cap-fast-a"})
 	defer release()
 
 	response, errExecute := manager.Execute(context.Background(), []string{"codex"}, cliproxyexecutor.Request{Model: "cap-model"}, cliproxyexecutor.Options{})
@@ -339,9 +376,14 @@ func TestManagerExecuteAccountConcurrencyAffinityTempThenRecover(t *testing.T) {
 		t.Fatalf("cold Execute() served by %q, want cap-aff-a", got)
 	}
 
-	release := trackAuthInFlight(&Auth{ID: "cap-aff-a"})
+	release := mustAcquireAccountCapacity(t, &Auth{ID: "cap-aff-a"})
 	if got := execute(); got != "cap-aff-b" {
 		t.Fatalf("Execute() with saturated home served by %q, want cap-aff-b temporary fallback", got)
+	}
+	// The saturated home keeps its binding: the failover is temporary, exactly
+	// like the overload divergence.
+	if bound, ok := selector.cache.Get("mixed::claude:cap-sess-1"); !ok || bound != "cap-aff-a" {
+		t.Fatalf("home binding = %q, %v; want cap-aff-a, true", bound, ok)
 	}
 
 	release()
@@ -375,4 +417,97 @@ func TestManagerExecuteStreamAccountConcurrencySlotHeldUntilStreamEnd(t *testing
 	for range result.Chunks {
 	}
 	waitForAccountInFlight(t, "cap-str-a", 0)
+}
+
+// End-to-end admission storm: 50 concurrent requests against a single account
+// capped at 5 in-flight slots. Exactly 5 win a slot and block in the executor;
+// the other 45 must fail over to a retryable capacity-busy error. The counter
+// never exceeds the limit and drains to zero afterwards.
+func TestManagerExecuteAccountConcurrencyAdmissionStorm(t *testing.T) {
+	setAccountConcurrencyLimitForTest(t, 5)
+
+	manager := NewManager(nil, &RoundRobinSelector{}, nil)
+	manager.SetRetryConfig(0, 0, 0)
+	executor := &capacityTestExecutor{
+		streamChunks: make(chan cliproxyexecutor.StreamChunk, 1),
+		started:      make(chan string, 64),
+		releaseAll:   make(chan struct{}),
+	}
+	manager.RegisterExecutor(executor)
+	registerSchedulerModels(t, "codex", "cap-model", "cap-storm-mgr-a")
+	if _, errRegister := manager.Register(context.Background(), &Auth{ID: "cap-storm-mgr-a", Provider: "codex"}); errRegister != nil {
+		t.Fatalf("Register() error = %v", errRegister)
+	}
+
+	const contenders = 50
+	const limit = 5
+	type executeOutcome struct {
+		payload string
+		err     error
+	}
+	start := make(chan struct{})
+	outcomes := make(chan executeOutcome, contenders)
+	var wg sync.WaitGroup
+	for range contenders {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			response, errExecute := manager.Execute(context.Background(), []string{"codex"}, cliproxyexecutor.Request{Model: "cap-model"}, cliproxyexecutor.Options{})
+			outcomes <- executeOutcome{payload: string(response.Payload), err: errExecute}
+		}()
+	}
+	close(start)
+
+	readOutcome := func() executeOutcome {
+		t.Helper()
+		select {
+		case outcome := <-outcomes:
+			return outcome
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for an execute outcome (deadlock?)")
+			return executeOutcome{}
+		}
+	}
+
+	// The 5 slot holders block inside the executor, so every other contender
+	// deterministically observes a full account and fails busy.
+	busy := 0
+	for busy < contenders-limit {
+		outcome := readOutcome()
+		var busyErr *accountConcurrencyBusyError
+		if !errors.As(outcome.err, &busyErr) || busyErr == nil {
+			t.Fatalf("outcome %d: err = %v, want accountConcurrencyBusyError (payload %q)", busy, outcome.err, outcome.payload)
+		}
+		if busyErr.StatusCode() != http.StatusTooManyRequests {
+			t.Fatalf("busy status = %d, want 429", busyErr.StatusCode())
+		}
+		if got := SafeResponseHeaders(outcome.err).Get("Retry-After"); got != "1" {
+			t.Fatalf("busy Retry-After = %q, want 1", got)
+		}
+		busy++
+	}
+	if got := accountInFlightCount("cap-storm-mgr-a"); got != limit {
+		t.Fatalf("in-flight with holders blocked = %d, want %d", got, limit)
+	}
+
+	close(executor.releaseAll)
+	for range limit {
+		outcome := readOutcome()
+		if outcome.err != nil {
+			t.Fatalf("holder outcome err = %v, want success", outcome.err)
+		}
+		if outcome.payload != "cap-storm-mgr-a" {
+			t.Fatalf("holder served by %q, want cap-storm-mgr-a", outcome.payload)
+		}
+	}
+
+	waitForAccountInFlight(t, "cap-storm-mgr-a", 0)
+	if got := accountInFlightHighWater("cap-storm-mgr-a"); got != limit {
+		t.Fatalf("high-water = %d, want exactly %d", got, limit)
+	}
+	if got := accountInFlightCount("cap-storm-mgr-a"); got != 0 {
+		t.Fatalf("in-flight after storm = %d, want 0 (leak)", got)
+	}
+	wg.Wait()
 }

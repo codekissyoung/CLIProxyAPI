@@ -484,7 +484,7 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 	// ice divergence: xAI OAuth concurrency gating (concurrencyBusy /
 	// releaseConcurrency) composed with the account in-flight capacity tracker
 	// (acquireExecutionConcurrency); keep alongside upstream's upstreamErr tracking.
-	concurrencyBusy := false
+	var concurrencyBusyErr error
 	var upstreamErr error
 	for {
 		if maxRetryCredentials > 0 && len(attempted) >= maxRetryCredentials {
@@ -501,18 +501,18 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 		}
 		auth, executor, provider, errPick := m.pickNextMixed(ctx, providers, routeModel, pickOpts, tried)
 		if errPick != nil {
-			if !homeMode && concurrencyBusy && lastErr == nil {
-				return cliproxyexecutor.Response{}, newXAIOAuthConcurrencyBusyError()
+			if !homeMode && concurrencyBusyErr != nil && lastErr == nil {
+				return cliproxyexecutor.Response{}, concurrencyBusyErr
 			}
 			if shouldReturnLastErrorOnPickFailure(homeMode, lastErr, errPick) {
 				return cliproxyexecutor.Response{}, preferredExecutionAttemptError(lastErr, upstreamErr)
 			}
 			return cliproxyexecutor.Response{}, errPick
 		}
-		releaseConcurrency, acquiredConcurrency := m.acquireExecutionConcurrency(auth)
-		if !acquiredConcurrency {
+		releaseConcurrency, busyErr := m.acquireExecutionConcurrency(auth)
+		if busyErr != nil {
 			tried[auth.ID] = struct{}{}
-			concurrencyBusy = true
+			concurrencyBusyErr = busyErr
 			continue
 		}
 
@@ -719,7 +719,7 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 	// ice divergence: xAI OAuth concurrency gating (concurrencyBusy /
 	// releaseConcurrency) composed with the account in-flight capacity tracker
 	// (acquireExecutionConcurrency); keep alongside upstream's upstreamErr tracking.
-	concurrencyBusy := false
+	var concurrencyBusyErr error
 	var upstreamErr error
 	for {
 		if maxRetryCredentials > 0 && len(attempted) >= maxRetryCredentials {
@@ -736,18 +736,18 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 		}
 		auth, executor, provider, errPick := m.pickNextMixed(ctx, providers, routeModel, pickOpts, tried)
 		if errPick != nil {
-			if !homeMode && concurrencyBusy && lastErr == nil {
-				return cliproxyexecutor.Response{}, newXAIOAuthConcurrencyBusyError()
+			if !homeMode && concurrencyBusyErr != nil && lastErr == nil {
+				return cliproxyexecutor.Response{}, concurrencyBusyErr
 			}
 			if shouldReturnLastErrorOnPickFailure(homeMode, lastErr, errPick) {
 				return cliproxyexecutor.Response{}, preferredExecutionAttemptError(lastErr, upstreamErr)
 			}
 			return cliproxyexecutor.Response{}, errPick
 		}
-		releaseConcurrency, acquiredConcurrency := m.acquireExecutionConcurrency(auth)
-		if !acquiredConcurrency {
+		releaseConcurrency, busyErr := m.acquireExecutionConcurrency(auth)
+		if busyErr != nil {
 			tried[auth.ID] = struct{}{}
-			concurrencyBusy = true
+			concurrencyBusyErr = busyErr
 			continue
 		}
 
@@ -959,7 +959,7 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 	// ice divergence: xAI OAuth concurrency gating (concurrencyBusy /
 	// releaseConcurrency) composed with the account in-flight capacity tracker
 	// (acquireExecutionConcurrency); keep alongside upstream's upstreamErr tracking.
-	concurrencyBusy := false
+	var concurrencyBusyErr error
 	var upstreamErr error
 	var roundTiming homeRetryRoundTiming
 	for {
@@ -997,8 +997,8 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 			auth, executor, provider, errPick = m.pickNextMixed(ctx, providers, routeModel, pickOpts, tried)
 		}
 		if errPick != nil {
-			if !homeMode && concurrencyBusy && lastErr == nil {
-				return nil, newXAIOAuthConcurrencyBusyError()
+			if !homeMode && concurrencyBusyErr != nil && lastErr == nil {
+				return nil, concurrencyBusyErr
 			}
 			preferredErr := preferredExecutionAttemptError(lastErr, upstreamErr)
 			var homeCooldown *homeDispatchRetryAfterError
@@ -1022,11 +1022,11 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 		}
 		releaseConcurrency := func() {}
 		if !homeMode {
-			var acquiredConcurrency bool
-			releaseConcurrency, acquiredConcurrency = m.acquireExecutionConcurrency(auth)
-			if !acquiredConcurrency {
+			var busyErr error
+			releaseConcurrency, busyErr = m.acquireExecutionConcurrency(auth)
+			if busyErr != nil {
 				tried[auth.ID] = struct{}{}
-				concurrencyBusy = true
+				concurrencyBusyErr = busyErr
 				continue
 			}
 		}

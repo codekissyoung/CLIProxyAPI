@@ -289,6 +289,10 @@ func SafeResponseHeaders(err error) http.Header {
 	if errors.As(err, &xaiBusy) && xaiBusy != nil {
 		return xaiBusy.SafeResponseHeaders()
 	}
+	var capacityBusy *accountConcurrencyBusyError
+	if errors.As(err, &capacityBusy) && capacityBusy != nil {
+		return capacityBusy.SafeResponseHeaders()
+	}
 	var exhausted *homeRetryRoundExhaustedError
 	if errors.As(err, &exhausted) && exhausted != nil {
 		retryAfter := exhausted.RetryAfter()

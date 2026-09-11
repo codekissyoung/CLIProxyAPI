@@ -76,30 +76,41 @@ Key conflict sites are tagged in code with `// ice divergence: ...`.
     session through a temp account and the existing `home_recovered` path
     migrates it back on recovery.
 
-15. **Per-account in-flight capacity gate** (2026-09-11;
-    `credential_capacity.go`, `selector.go` `collectAvailableByPriority`,
-    `conductor_selection.go` `availableAuthsForRouteModelWithPriorityMode`,
-    `scheduler.go` `scheduledAuthPredicate`,
+15. **Per-account in-flight capacity gate** (2026-09-11; TOCTOU review fix
+    2026-09-12; `credential_capacity.go`,
     `conductor_execution.go` `acquireExecutionConcurrency`,
     `internal/config` `account-concurrency-limit`;
     pinned by `credential_capacity_test.go`,
     `internal/config/account_concurrency_test.go`)
-    sub2api-style `accounts.concurrency`: a credential holding its configured
-    number of in-flight requests is skipped at selection time (no error, no
-    unbind) until a slot frees; session affinity treats a saturated home as
-    temporarily unavailable and the existing home_recovered path migrates the
-    session back. The counter is maintained per execution attempt in the
-    conductor (composed into the xAI gate acquisition so every existing
-    release site keeps its exact-once lifecycle; streams hold the slot until
-    the channel drains). Global default via `account-concurrency-limit`
-    (0 = disabled, the default, preserving legacy behavior); per-credential
-    override via auth-file `attributes["concurrency"]` ("0" = unlimited,
-    invalid values fall back to the global default). The gate hooks only the
-    selection funnels (selector filter, conductor candidate filter, scheduler
-    fast-path predicate) — deliberately NOT `isAuthBlockedForModel`, which is
-    also consulted mid-attempt by `filterExecutionModels` and would self-block
-    the attempt holding the slot. No-op under Home mode (Home has its own
-    concurrency lifecycle). Upstream has no equivalent.
+    sub2api-style `accounts.concurrency`: each execution attempt reserves an
+    in-flight slot for the picked credential through an atomic
+    check-and-reserve under a single mutex (`tryAcquireAccountCapacity`) and
+    releases it exactly once at the existing `releaseConcurrency` exit points
+    (streams hold the slot until the channel drains). The reservation is taken
+    immediately after the pick in the same loop iteration, and every abandon
+    path of the attempt (prepare failure, interceptor error, per-model
+    failure, exhausted candidates) flows through that release. A saturated
+    credential is deliberately NOT pre-filtered at selection: the pick loop
+    tries it, admission rejects it, the credential is marked tried, and the
+    loop moves to the next candidate; when every candidate is saturated the
+    request fails with a retryable 429 `credential_concurrency_exceeded`
+    (Retry-After: 1s) instead of a plain `auth_not_found`. Session affinity
+    keeps the home binding during such a temporary failover and the existing
+    home_recovered path migrates the session back once a slot frees. Global
+    default via `account-concurrency-limit` (0 = disabled, the default,
+    preserving legacy behavior); per-credential override via auth-file
+    `attributes["concurrency"]` ("0" = unlimited, invalid values fall back to
+    the global default). No-op under Home mode (Home has its own concurrency
+    lifecycle). Upstream has no equivalent.
+    Review history: the first version split the limit check from the
+    increment (selection-funnel pre-filter plus unconditional increment at
+    execution) — a TOCTOU race that let a 50-goroutine burst push a limit-5
+    credential far past its cap, and it also produced inconsistent client
+    errors (`auth_not_found` vs busy). The funnel hooks were reverted; the
+    gate now lives only at the atomic admission point. The gate must never be
+    hooked into `isAuthBlockedForModel`, which is also consulted mid-attempt
+    by `filterExecutionModels` and would self-block the attempt holding the
+    slot.
 
 ## Executors (internal/runtime/executor)
 
