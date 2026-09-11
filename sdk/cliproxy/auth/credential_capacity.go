@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -118,6 +119,28 @@ func tryAcquireAccountCapacity(auth *Auth) (func(), bool) {
 			accountConcurrencyCapacity.inFlight[auth.ID]--
 		})
 	}, true
+}
+
+// capacityBusyTakesPriority reports whether the capacity busy error is the
+// truthful final error for a failed pick: only when the pick exhausted every
+// candidate without a real unavailability reason (a bare auth_not_found, which
+// is what remains once capacity-rejected credentials sit in tried). A pick
+// failure carrying cooldown or unavailable state means some candidate was NOT
+// rejected for capacity, so that reason must win over the 429 + Retry-After
+// busy contract (review minor: busy previously masked cooldown causes).
+func capacityBusyTakesPriority(errPick error) bool {
+	if errPick == nil {
+		return false
+	}
+	var cooldownErr *modelCooldownError
+	if errors.As(errPick, &cooldownErr) && cooldownErr != nil {
+		return false
+	}
+	var authErr *Error
+	if errors.As(errPick, &authErr) && authErr != nil && authErr.Code == "auth_unavailable" {
+		return false
+	}
+	return true
 }
 
 // accountConcurrencyBusyError reports that every eligible credential is at its

@@ -94,7 +94,13 @@ Key conflict sites are tagged in code with `// ice divergence: ...`.
     tries it, admission rejects it, the credential is marked tried, and the
     loop moves to the next candidate; when every candidate is saturated the
     request fails with a retryable 429 `credential_concurrency_exceeded`
-    (Retry-After: 1s) instead of a plain `auth_not_found`. Session affinity
+    (Retry-After: 1s) instead of a plain `auth_not_found`. Error priority:
+    real provider errors rank highest (unchanged), and a pick failure
+    carrying a cooldown or unavailable reason (`modelCooldownError` /
+    `auth_unavailable`) outranks the busy error — busy is returned only when
+    the pick exhausted all candidates with a bare `auth_not_found`, i.e.
+    capacity was the sole failure cause, so the 429 + Retry-After contract
+    never masks a genuine cooldown. Session affinity
     keeps the home binding during such a temporary failover and the existing
     home_recovered path migrates the session back once a slot frees. Global
     default via `account-concurrency-limit` (0 = disabled, the default,

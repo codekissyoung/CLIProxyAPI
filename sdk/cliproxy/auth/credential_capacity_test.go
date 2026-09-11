@@ -511,3 +511,64 @@ func TestManagerExecuteAccountConcurrencyAdmissionStorm(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// Review minor: when one credential is capacity-saturated and the rest are in
+// cooldown, the final error must be the cooldown reason, not the 429 capacity
+// busy error (busy is only truthful when capacity is the sole failure cause).
+func TestManagerExecuteAccountConcurrencyBusyYieldsToCooldown(t *testing.T) {
+	setAccountConcurrencyLimitForTest(t, 1)
+
+	manager := NewManager(nil, &RoundRobinSelector{}, nil)
+	manager.RegisterExecutor(&capacityTestExecutor{streamChunks: make(chan cliproxyexecutor.StreamChunk, 1)})
+	registerSchedulerModels(t, "codex", "cap-model", "cap-mix-a", "cap-mix-b")
+	if _, errRegister := manager.Register(context.Background(), &Auth{ID: "cap-mix-a", Provider: "codex"}); errRegister != nil {
+		t.Fatalf("Register(cap-mix-a) error = %v", errRegister)
+	}
+	cooling := &Auth{ID: "cap-mix-b", Provider: "codex", Unavailable: true, NextRetryAfter: time.Now().Add(time.Hour)}
+	if _, errRegister := manager.Register(context.Background(), cooling); errRegister != nil {
+		t.Fatalf("Register(cap-mix-b) error = %v", errRegister)
+	}
+
+	release := mustAcquireAccountCapacity(t, &Auth{ID: "cap-mix-a"})
+	defer release()
+
+	_, errExecute := manager.Execute(context.Background(), []string{"codex"}, cliproxyexecutor.Request{Model: "cap-model"}, cliproxyexecutor.Options{})
+	if errExecute == nil {
+		t.Fatal("Execute() error = nil, want cooldown failure")
+	}
+	var busyErr *accountConcurrencyBusyError
+	if errors.As(errExecute, &busyErr) {
+		t.Fatalf("Execute() error = %v, want the cooldown reason (busy must not mask it)", errExecute)
+	}
+	var cooldownErr *modelCooldownError
+	var authErr *Error
+	isCooldown := errors.As(errExecute, &cooldownErr) && cooldownErr != nil
+	isUnavailable := errors.As(errExecute, &authErr) && authErr != nil && authErr.Code == "auth_unavailable"
+	if !isCooldown && !isUnavailable {
+		t.Fatalf("Execute() error = %v (%T), want modelCooldownError or auth_unavailable", errExecute, errExecute)
+	}
+}
+
+// When every candidate is capacity-saturated, the busy error remains the final
+// answer (429 + Retry-After), since capacity is the sole failure cause.
+func TestManagerExecuteAccountConcurrencyAllFullReturnsBusy(t *testing.T) {
+	setAccountConcurrencyLimitForTest(t, 1)
+
+	manager := newCapacityTestManager(t, &RoundRobinSelector{}, "cap-all-a", "cap-all-b")
+	releaseA := mustAcquireAccountCapacity(t, &Auth{ID: "cap-all-a"})
+	defer releaseA()
+	releaseB := mustAcquireAccountCapacity(t, &Auth{ID: "cap-all-b"})
+	defer releaseB()
+
+	_, errExecute := manager.Execute(context.Background(), []string{"codex"}, cliproxyexecutor.Request{Model: "cap-model"}, cliproxyexecutor.Options{})
+	var busyErr *accountConcurrencyBusyError
+	if !errors.As(errExecute, &busyErr) || busyErr == nil {
+		t.Fatalf("Execute() error = %v, want accountConcurrencyBusyError", errExecute)
+	}
+	if busyErr.StatusCode() != http.StatusTooManyRequests {
+		t.Fatalf("busy status = %d, want 429", busyErr.StatusCode())
+	}
+	if got := SafeResponseHeaders(errExecute).Get("Retry-After"); got != "1" {
+		t.Fatalf("busy Retry-After = %q, want 1", got)
+	}
+}

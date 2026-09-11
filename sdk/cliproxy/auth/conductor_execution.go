@@ -501,7 +501,7 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 		}
 		auth, executor, provider, errPick := m.pickNextMixed(ctx, providers, routeModel, pickOpts, tried)
 		if errPick != nil {
-			if !homeMode && concurrencyBusyErr != nil && lastErr == nil {
+			if !homeMode && concurrencyBusyErr != nil && lastErr == nil && capacityBusyTakesPriority(errPick) {
 				return cliproxyexecutor.Response{}, concurrencyBusyErr
 			}
 			if shouldReturnLastErrorOnPickFailure(homeMode, lastErr, errPick) {
@@ -736,7 +736,7 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 		}
 		auth, executor, provider, errPick := m.pickNextMixed(ctx, providers, routeModel, pickOpts, tried)
 		if errPick != nil {
-			if !homeMode && concurrencyBusyErr != nil && lastErr == nil {
+			if !homeMode && concurrencyBusyErr != nil && lastErr == nil && capacityBusyTakesPriority(errPick) {
 				return cliproxyexecutor.Response{}, concurrencyBusyErr
 			}
 			if shouldReturnLastErrorOnPickFailure(homeMode, lastErr, errPick) {
@@ -997,7 +997,7 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 			auth, executor, provider, errPick = m.pickNextMixed(ctx, providers, routeModel, pickOpts, tried)
 		}
 		if errPick != nil {
-			if !homeMode && concurrencyBusyErr != nil && lastErr == nil {
+			if !homeMode && concurrencyBusyErr != nil && lastErr == nil && capacityBusyTakesPriority(errPick) {
 				return nil, concurrencyBusyErr
 			}
 			preferredErr := preferredExecutionAttemptError(lastErr, upstreamErr)
