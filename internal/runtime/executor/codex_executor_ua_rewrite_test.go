@@ -151,7 +151,7 @@ func TestApplyCodexWebsocketHeadersForcesNonMacOSClientUAToCanonical(t *testing.
 		"Originator": "Codex Desktop",
 	})
 
-	headers := applyCodexWebsocketHeaders(ctx, http.Header{}, auth, "", nil)
+	headers := applyCodexWebsocketHeaders(ctx, http.Header{}, auth, "", nil, false)
 
 	if got := headers.Get("User-Agent"); got != codexUserAgent {
 		t.Fatalf("User-Agent = %s, want canonical %s", got, codexUserAgent)
@@ -172,7 +172,7 @@ func TestApplyCodexWebsocketHeadersAlsoConvergesMacOSClientUA(t *testing.T) {
 		"Originator": "Codex Desktop",
 	})
 
-	headers := applyCodexWebsocketHeaders(ctx, http.Header{}, auth, "", nil)
+	headers := applyCodexWebsocketHeaders(ctx, http.Header{}, auth, "", nil, false)
 
 	if got := headers.Get("User-Agent"); got != codexUserAgent {
 		t.Fatalf("User-Agent = %s, want canonical %s", got, codexUserAgent)
@@ -191,7 +191,7 @@ func TestApplyCodexWebsocketHeadersRespectsAdminCfgUserAgent(t *testing.T) {
 		CodexHeaderDefaults: config.CodexHeaderDefaults{UserAgent: "admin-set-ua/1.0 (linux)"},
 	}
 
-	headers := applyCodexWebsocketHeaders(context.Background(), http.Header{}, auth, "", cfg)
+	headers := applyCodexWebsocketHeaders(context.Background(), http.Header{}, auth, "", cfg, false)
 
 	if got := headers.Get("User-Agent"); got != "admin-set-ua/1.0 (linux)" {
 		t.Fatalf("User-Agent = %s, want admin override untouched", got)
@@ -243,7 +243,7 @@ func TestApplyCodexWebsocketHeadersNeverLeavesEmptyUAForAPIKeyWithoutClientUA(t 
 	// Client sends no User-Agent header at all.
 	ctx := contextWithGinHeaders(map[string]string{})
 
-	headers := applyCodexWebsocketHeaders(ctx, http.Header{}, auth, "sk-test", nil)
+	headers := applyCodexWebsocketHeaders(ctx, http.Header{}, auth, "sk-test", nil, false)
 
 	got := headers.Get("User-Agent")
 	if got == "" || strings.Contains(got, "Go-http-client") {

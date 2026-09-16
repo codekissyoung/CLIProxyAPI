@@ -74,7 +74,7 @@ func TestApplyCodexWebsocketHeadersDropsTurnState(t *testing.T) {
 		"X-Codex-Turn-Metadata": `{"session_id":"s1"}`,
 	})
 	auth := &cliproxyauth.Auth{ID: "auth-1", Provider: "codex"}
-	headers := applyCodexWebsocketHeaders(ctx, nil, auth, "oauth-token", nil)
+	headers := applyCodexWebsocketHeaders(ctx, nil, auth, "oauth-token", nil, false)
 	if got := headers.Get("x-codex-turn-state"); got != "" {
 		t.Fatalf("x-codex-turn-state = %q, want stripped from upstream handshake", got)
 	}

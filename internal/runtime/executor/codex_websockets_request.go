@@ -71,7 +71,7 @@ func applyCodexPromptCacheHeadersWithAuth(ctx context.Context, auth *cliproxyaut
 	return rawJSON, headers, nil
 }
 
-func applyCodexWebsocketHeaders(ctx context.Context, headers http.Header, auth *cliproxyauth.Auth, token string, cfg *config.Config, clientHeaders ...http.Header) http.Header {
+func applyCodexWebsocketHeaders(ctx context.Context, headers http.Header, auth *cliproxyauth.Auth, token string, cfg *config.Config, nativeRequest bool, clientHeaders ...http.Header) http.Header {
 	if headers == nil {
 		headers = http.Header{}
 	}
@@ -90,6 +90,15 @@ func applyCodexWebsocketHeaders(ctx context.Context, headers http.Header, auth *
 
 	isAPIKey := codexAuthUsesAPIKey(auth)
 	cfgUserAgent, cfgBetaFeatures := codexHeaderDefaults(cfg, auth)
+	ensureHeaderWithPriority(headers, ginHeaders, "x-codex-beta-features", cfgBetaFeatures, "")
+	// ice divergence: x-codex-turn-state is intentionally NOT forwarded (see below).
+	misc.EnsureHeader(headers, ginHeaders, "x-codex-turn-metadata", "")
+	misc.EnsureHeader(headers, ginHeaders, "x-client-request-id", "")
+	misc.EnsureHeader(headers, ginHeaders, "x-responsesapi-include-timing-metrics", "")
+	misc.EnsureHeader(headers, ginHeaders, "Version", "")
+	if nativeRequest {
+		misc.EnsureHeader(headers, ginHeaders, codexResponsesLiteHeader, "")
+	}
 	if isAPIKey {
 		ensureHeaderWithPriority(headers, ginHeaders, "x-codex-beta-features", "", "")
 	} else {
@@ -145,6 +154,17 @@ func applyCodexWebsocketHeaders(ctx context.Context, headers http.Header, auth *
 		sessionFallback = uuid.NewString()
 	}
 	ensureCodexWebsocketSessionHeader(headers, ginHeaders, sessionFallback)
+	if nativeRequest && cfg != nil && cfg.Codex.DisableCodexCloaking {
+		deleteHeaderCaseInsensitive(headers, "session_id")
+		deleteHeaderCaseInsensitive(headers, "conversation_id")
+		for key, values := range ginHeaders {
+			switch strings.ToLower(key) {
+			case "session-id", "session_id", "conversation_id", "thread-id", "x-codex-routing-hint", "x-codex-window-id":
+				deleteHeaderCaseInsensitive(headers, key)
+				headers[key] = append([]string(nil), values...)
+			}
+		}
+	}
 	clientOriginator := strings.TrimSpace(ginHeaders.Get("Originator"))
 	switch {
 	case isAPIKey:
@@ -174,7 +194,8 @@ func applyCodexWebsocketHeaders(ctx context.Context, headers http.Header, auth *
 	if auth != nil {
 		attrs = auth.Attributes
 	}
-	util.ApplyCustomHeadersFromAttrs(&http.Request{Header: headers}, attrs, ginHeaders)
+	req := (&http.Request{Header: headers}).WithContext(ctx)
+	util.ApplyCustomHeadersFromAttrs(req, attrs, ginHeaders)
 
 	return headers
 }

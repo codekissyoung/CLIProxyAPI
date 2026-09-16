@@ -22,6 +22,14 @@ Key conflict sites are tagged in code with `// ice divergence: ...`.
    Upstream's `TestManagerSessionAffinityAliasCooldownPreservesSelection`
    (added in 5ab0bca0) asserts failover rebind semantics; the ice adaptation
    expects explicit sessions to return to the recovered home credential.
+   Upstream's `TestHostAffinityLookupCallback_Contract` (added in 0796d6d1,
+   `internal/pluginhost/affinity_callbacks_test.go`) is adapted the same way:
+   rebind keeps the home credential, fresh-namespace lookups assert the
+   actually-picked credential, disable-purge (below) yields `unbound`.
+   The model also purges a credential's affinity bindings on the
+   enabled->disabled transition (`conductor_lifecycle.go` `updateInternal`;
+   pinned by `conductor_update_test.go`) so sessions re-home instead of
+   sticking to a disabled pool account.
 
 2. **Session binding counts** (`session_cache.go`)
    `bindingCounts` + `SetBindingCountObserver`/`BindingCount` report logical
@@ -49,11 +57,15 @@ Key conflict sites are tagged in code with `// ice divergence: ...`.
    unavailable; `previousUnauthorized` from `LastError` is the transition
    marker). Pinned by `TestManager_RefreshAuthForRequest_RevocationCountedOnce`.
 
-6. **Codex turn-metadata session IDs** (`selector.go`,
-   `codexTurnMetadataSessionID`)
+6. **Codex turn-metadata session IDs** (`sdk/cliproxy/session/info.go`,
+   `codexTurnMetadataBodySessionID`; moved out of `selector.go` in the
+   2026-09-16 merge when upstream relocated the extraction chain into the
+   `cliproxysession` package)
    Session IDs are also extracted from the body-mirrored
    `client_metadata.x-codex-turn-metadata` header, which upstream does not
-   handle. Must stay ahead of upstream's slot/conv/thread header blocks.
+   handle. Must stay ahead of upstream's slot/conv/thread header blocks (now
+   the `X-Slot-Session-Id`/`X-Conversation-Id`/`X-Thread-Id` sections of
+   `ExtractSessionInfo`).
 
 7. **24h session-affinity TTL default** (`sdk/cliproxy/service_config.go`,
    `config.example.yaml`)
