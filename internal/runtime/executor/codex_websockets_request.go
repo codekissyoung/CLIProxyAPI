@@ -91,7 +91,6 @@ func applyCodexWebsocketHeaders(ctx context.Context, headers http.Header, auth *
 	isAPIKey := codexAuthUsesAPIKey(auth)
 	cfgUserAgent, cfgBetaFeatures := codexHeaderDefaults(cfg, auth)
 	ensureHeaderWithPriority(headers, ginHeaders, "x-codex-beta-features", cfgBetaFeatures, "")
-	// ice divergence: x-codex-turn-state is intentionally NOT forwarded (see below).
 	misc.EnsureHeader(headers, ginHeaders, "x-codex-turn-metadata", "")
 	misc.EnsureHeader(headers, ginHeaders, "x-client-request-id", "")
 	misc.EnsureHeader(headers, ginHeaders, "x-responsesapi-include-timing-metrics", "")
@@ -104,14 +103,15 @@ func applyCodexWebsocketHeaders(ctx context.Context, headers http.Header, auth *
 	} else {
 		ensureHeaderWithPriority(headers, ginHeaders, "x-codex-beta-features", cfgBetaFeatures, codexBetaFeatures)
 	}
-	// ice divergence: x-codex-turn-state is intentionally NOT forwarded upstream.
-	// The value is a sticky session-routing token minted under whichever account
-	// served an earlier turn; echoing it upstream from a different pool account
-	// would deterministically link those accounts as one client. The HTTP path
-	// never sends it, and turn resumption here relies on the pinned
-	// previous_response_id / full-replay flow instead. The downstream upgrade
-	// response still echoes the client value so client reconnect logic is
-	// unchanged.
+	// ice divergence: x-codex-turn-state is intentionally NOT forwarded on the
+	// websocket handshake (upstream forwards it on both paths since 2026-09;
+	// the HTTP path follows upstream). The value is a sticky session-routing
+	// token minted under whichever account served an earlier turn; echoing it
+	// upstream from a different pool account over the long-lived WS connection
+	// would deterministically link those accounts as one client. Turn
+	// resumption here relies on the pinned previous_response_id / full-replay
+	// flow instead. The downstream upgrade response still echoes the client
+	// value so client reconnect logic is unchanged.
 	misc.EnsureHeader(headers, ginHeaders, "x-codex-turn-metadata", "")
 	stripCodexTurnMetadataWorkspaces(headers)
 	misc.EnsureHeader(headers, ginHeaders, "x-client-request-id", "")
@@ -196,6 +196,7 @@ func applyCodexWebsocketHeaders(ctx context.Context, headers http.Header, auth *
 	}
 	req := (&http.Request{Header: headers}).WithContext(ctx)
 	util.ApplyCustomHeadersFromAttrs(req, attrs, ginHeaders)
+	applyCodexCloakingHeaders(headers, cfg)
 
 	return headers
 }

@@ -113,7 +113,10 @@ func TestApplyCodexHeadersDoesNotForceUAForAPIKeyAuth(t *testing.T) {
 	}
 }
 
-func TestApplyCodexHeadersRespectsAdminCfgUserAgentEvenIfNonMacOS(t *testing.T) {
+func TestApplyCodexHeadersCloaksAdminCfgUserAgent(t *testing.T) {
+	// Mainline semantics: the cloaking layer overrides even an
+	// admin-configured User-Agent with the canonical Codex CLI identity
+	// (unless codex.disable-codex-cloaking is set).
 	req, err := http.NewRequest(http.MethodPost, "https://example.com/responses", nil)
 	if err != nil {
 		t.Fatalf("NewRequest() error = %v", err)
@@ -132,12 +135,11 @@ func TestApplyCodexHeadersRespectsAdminCfgUserAgentEvenIfNonMacOS(t *testing.T) 
 
 	applyCodexHeaders(req, auth, "oauth-token", true, cfg)
 
-	if got := req.Header.Get("User-Agent"); got != "admin-set-ua/1.0 (linux)" {
-		t.Fatalf("User-Agent = %s, want admin override untouched", got)
+	if got := req.Header.Get("User-Agent"); got != codexUserAgent {
+		t.Fatalf("User-Agent = %s, want canonical cloaking UA %s", got, codexUserAgent)
 	}
-	// cfg UA was honored — admin's choice; we do not also force Originator.
-	if got := req.Header.Get("Originator"); got != "admin-origin" {
-		t.Fatalf("Originator = %s, want admin-origin (no forced override when cfg UA is set)", got)
+	if got := req.Header.Get("Originator"); got != codexOriginator {
+		t.Fatalf("Originator = %s, want %s", got, codexOriginator)
 	}
 }
 
@@ -182,7 +184,10 @@ func TestApplyCodexWebsocketHeadersAlsoConvergesMacOSClientUA(t *testing.T) {
 	}
 }
 
-func TestApplyCodexWebsocketHeadersRespectsAdminCfgUserAgent(t *testing.T) {
+func TestApplyCodexWebsocketHeadersCloaksAdminCfgUserAgent(t *testing.T) {
+	// Mainline semantics: the cloaking layer overrides even an
+	// admin-configured User-Agent with the canonical Codex CLI identity
+	// (unless codex.disable-codex-cloaking is set).
 	auth := &cliproxyauth.Auth{
 		Provider: "codex",
 		Metadata: map[string]any{"email": "user@example.com"},
@@ -193,8 +198,8 @@ func TestApplyCodexWebsocketHeadersRespectsAdminCfgUserAgent(t *testing.T) {
 
 	headers := applyCodexWebsocketHeaders(context.Background(), http.Header{}, auth, "", cfg, false)
 
-	if got := headers.Get("User-Agent"); got != "admin-set-ua/1.0 (linux)" {
-		t.Fatalf("User-Agent = %s, want admin override untouched", got)
+	if got := headers.Get("User-Agent"); got != codexUserAgent {
+		t.Fatalf("User-Agent = %s, want canonical cloaking UA %s", got, codexUserAgent)
 	}
 }
 

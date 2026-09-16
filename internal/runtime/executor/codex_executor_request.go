@@ -619,6 +619,7 @@ func applyCodexHeadersFromSources(r *http.Request, auth *cliproxyauth.Auth, toke
 		misc.EnsureHeader(r.Header, ginHeaders, "Version", codexVersion)
 	}
 	misc.EnsureHeader(r.Header, ginHeaders, "X-Codex-Turn-Metadata", "")
+	misc.EnsureHeader(r.Header, ginHeaders, "X-Codex-Turn-State", "")
 	stripCodexTurnMetadataWorkspaces(r.Header)
 	misc.EnsureHeader(r.Header, ginHeaders, "X-Client-Request-Id", "")
 	if strings.TrimSpace(r.Header.Get("X-Client-Request-Id")) == "" {
@@ -674,6 +675,17 @@ func applyCodexHeadersFromSources(r *http.Request, auth *cliproxyauth.Auth, toke
 		attrs = auth.Attributes
 	}
 	util.ApplyCustomHeadersFromAttrs(r, attrs, ginHeaders)
+	applyCodexCloakingHeaders(r.Header, cfg)
+}
+
+// applyCodexCloakingHeaders forces the canonical Codex CLI identity headers
+// (upstream behavior); disabled by codex.disable-codex-cloaking.
+func applyCodexCloakingHeaders(headers http.Header, cfg *config.Config) {
+	if headers == nil || cfg == nil || cfg.Codex.DisableCodexCloaking {
+		return
+	}
+	headers.Set("User-Agent", codexUserAgent)
+	headers.Set("Originator", codexOriginator)
 }
 
 func normalizeCodexInstructions(body []byte, nativeRequest ...bool) []byte {

@@ -1119,35 +1119,60 @@ func TestApplyCodexWebsocketHeadersDefaultsToCurrentResponsesBeta(t *testing.T) 
 }
 
 func TestApplyCodexWebsocketHeadersDefaultsToCodexCloaking(t *testing.T) {
-	// With default cloaking, an OAuth auth without an admin-configured User-Agent
-	// gets the captured Codex CLI 0.154.0 UA and matching Originator.
-	t.Run("OAuth forces captured CLI UA", func(t *testing.T) {
-		auth := &cliproxyauth.Auth{Provider: "codex"}
-		ctx := contextWithGinHeaders(map[string]string{
-			"User-Agent": "codex-tui/0.144.1 (Ubuntu 26.4.0; x86_64) xterm-256color (codex-tui; 0.144.1)",
-			"Originator": "codex-tui",
+	// Upstream semantics: default cloaking forces the canonical Codex CLI
+	// identity over client, auth-attr, and admin-configured headers alike.
+	tests := []struct {
+		name  string
+		auth  *cliproxyauth.Auth
+		token string
+	}{
+		{
+			name: "OAuth",
+			auth: &cliproxyauth.Auth{
+				Provider: "codex",
+				Attributes: map[string]string{
+					"header:User-Agent": "custom-ua",
+					"header:Originator": "custom-origin",
+				},
+			},
+		},
+		{
+			name: "API key",
+			auth: &cliproxyauth.Auth{
+				Provider: "codex",
+				Attributes: map[string]string{
+					"api_key":           "sk-test",
+					"header:User-Agent": "custom-ua",
+					"header:Originator": "custom-origin",
+				},
+			},
+			token: "sk-test",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{
+				CodexHeaderDefaults: config.CodexHeaderDefaults{UserAgent: "config-ua"},
+			}
+			ctx := contextWithGinHeaders(map[string]string{
+				"User-Agent": "client-ua",
+				"Originator": "client-origin",
+			})
+			headers := http.Header{}
+			headers.Set("User-Agent", "existing-ua")
+			headers.Set("Originator", "existing-origin")
+
+			headers = applyCodexWebsocketHeaders(ctx, headers, tt.auth, tt.token, cfg, false)
+
+			if got := headers.Get("User-Agent"); got != codexUserAgent {
+				t.Fatalf("User-Agent = %q, want %q", got, codexUserAgent)
+			}
+			if got := headers.Get("Originator"); got != codexOriginator {
+				t.Fatalf("Originator = %q, want %q", got, codexOriginator)
+			}
 		})
-		headers := applyCodexWebsocketHeaders(ctx, http.Header{}, auth, "", nil, false)
-		if want := codexFallbackUserAgent(auth); headers.Get("User-Agent") != want {
-			t.Fatalf("User-Agent = %q, want captured CLI UA %q", headers.Get("User-Agent"), want)
-		}
-		if got := headers.Get("Originator"); got != codexOriginator {
-			t.Fatalf("Originator = %q, want %q", got, codexOriginator)
-		}
-	})
-	t.Run("admin config User-Agent wins", func(t *testing.T) {
-		auth := &cliproxyauth.Auth{Provider: "codex"}
-		cfg := &config.Config{
-			CodexHeaderDefaults: config.CodexHeaderDefaults{UserAgent: "config-ua"},
-		}
-		ctx := contextWithGinHeaders(map[string]string{
-			"User-Agent": "codex-tui/0.144.1 (Ubuntu 26.4.0; x86_64) xterm-256color (codex-tui; 0.144.1)",
-		})
-		headers := applyCodexWebsocketHeaders(ctx, http.Header{}, auth, "", cfg, false)
-		if got := headers.Get("User-Agent"); got != "config-ua" {
-			t.Fatalf("User-Agent = %q, want admin override %q", got, "config-ua")
-		}
-	})
+	}
 }
 
 func TestApplyCodexWebsocketHeadersPassesThroughClientIdentityHeadersWhenCloakingDisabled(t *testing.T) {
@@ -1792,7 +1817,7 @@ func TestApplyCodexHeadersUsesConfigUserAgentForOAuth(t *testing.T) {
 
 func TestApplyCodexHeadersDefaultsToCodexCloaking(t *testing.T) {
 	// With default cloaking, OAuth traffic converges on the captured CLI identity;
-	// an admin-configured User-Agent still wins.
+	// an admin-configured User-Agent is cloaked too (mainline semantics).
 	t.Run("OAuth forces captured CLI UA", func(t *testing.T) {
 		req, err := http.NewRequest(http.MethodPost, "https://example.com/responses", nil)
 		if err != nil {
@@ -1811,7 +1836,7 @@ func TestApplyCodexHeadersDefaultsToCodexCloaking(t *testing.T) {
 			t.Fatalf("Originator = %q, want %q", got, codexOriginator)
 		}
 	})
-	t.Run("admin config User-Agent wins", func(t *testing.T) {
+	t.Run("admin config User-Agent is cloaked", func(t *testing.T) {
 		req, err := http.NewRequest(http.MethodPost, "https://example.com/responses", nil)
 		if err != nil {
 			t.Fatalf("NewRequest() error = %v", err)
@@ -1824,8 +1849,8 @@ func TestApplyCodexHeadersDefaultsToCodexCloaking(t *testing.T) {
 			"User-Agent": []string{"codex-tui/0.144.1 (Ubuntu 26.4.0; x86_64) xterm-256color (codex-tui; 0.144.1)"},
 		}
 		applyCodexHeadersFromSources(req, auth, "oauth-token", false, cfg, ginHeaders)
-		if got := req.Header.Get("User-Agent"); got != "config-ua" {
-			t.Fatalf("User-Agent = %q, want admin override %q", got, "config-ua")
+		if got := req.Header.Get("User-Agent"); got != codexUserAgent {
+			t.Fatalf("User-Agent = %q, want canonical cloaking UA %q", got, codexUserAgent)
 		}
 	})
 }
@@ -2001,8 +2026,8 @@ func TestApplyCodexHeadersPassesThroughClientIdentityHeaders(t *testing.T) {
 	if got := req.Header.Get("X-Codex-Turn-Metadata"); got != `{"turn_id":"turn-1"}` {
 		t.Fatalf("X-Codex-Turn-Metadata = %s, want %s", got, `{"turn_id":"turn-1"}`)
 	}
-	if got := req.Header.Get("X-Codex-Turn-State"); got != "" {
-		t.Fatalf("X-Codex-Turn-State = %q, want stripped (ice divergence: never forwarded upstream)", got)
+	if got := req.Header.Get("X-Codex-Turn-State"); got != "opaque-turn-state" {
+		t.Fatalf("X-Codex-Turn-State = %q, want %q", got, "opaque-turn-state")
 	}
 	if got := req.Header.Get("X-Client-Request-Id"); got != "019d2233-e240-7162-992d-38df0a2a0e0d" {
 		t.Fatalf("X-Client-Request-Id = %s, want %s", got, "019d2233-e240-7162-992d-38df0a2a0e0d")

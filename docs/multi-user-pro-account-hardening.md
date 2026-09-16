@@ -30,8 +30,9 @@ Codex CLI 0.154.0 TUI 身份，而不是暴露各下游客户端的系统、版�
 > Mac OS/iTerm 字符串（放弃自组的 Ubuntu/vscode 字符串，与上游观测身份保持
 > 一致）；TLS ClientHello 基线不变。
 
-OAuth 请求默认强制使用这一组身份；管理员显式设置
-`codex-header-defaults.user-agent` 或开启 `disable-codex-cloaking` 时仍按配置处理。
+OAuth 请求默认强制使用这一组身份（跟随主线 cloaking 语义：即使管理员显式设置
+`codex-header-defaults.user-agent` 也会被规范身份覆盖）；只有开启
+`disable-codex-cloaking` 时才按配置处理。
 API-key 路径继续保留调用方显式身份，但绝不允许空 UA 退化成 Go 默认 UA。
 
 `X-Codex-Turn-Metadata.workspaces` 仍会在 HTTP 和 WebSocket 路径剥离，避免把
