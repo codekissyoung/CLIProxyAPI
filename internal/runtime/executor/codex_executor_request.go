@@ -27,9 +27,9 @@ import (
 )
 
 const (
-	codexUserAgent             = "codex-tui/0.153.4 (Ubuntu 22.4.0; x86_64) vscode/1.135.0 (codex-tui; 0.153.4)"
+	codexUserAgent             = "codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.154.0)"
 	codexOriginator            = "codex-tui"
-	codexVersion               = "0.153.4"
+	codexVersion               = "0.154.0"
 	codexBetaFeatures          = "remote_compaction_v2"
 	codexDefaultImageToolModel = "gpt-image-2"
 	codexResponsesLiteHeader   = "X-OpenAI-Internal-Codex-Responses-Lite"
@@ -37,7 +37,7 @@ const (
 
 // codexFallbackUserAgent intentionally converges every OAuth account on one
 // captured Codex CLI persona. Per-account variation here would contradict the
-// stable 0.153.4 transport profile used on the wire.
+// stable 0.154.0 transport profile used on the wire.
 func codexFallbackUserAgent(_ *cliproxyauth.Auth) string {
 	return codexUserAgent
 }

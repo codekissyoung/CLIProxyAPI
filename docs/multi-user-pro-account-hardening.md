@@ -1,16 +1,16 @@
-# 多人共用 Pro 账号：Codex CLI 0.153.4 上游身份收敛
+# 多人共用 Pro 账号：Codex CLI 0.154.0 上游身份收敛
 
 ## 目标
 
-`ice` 分支把同一 OAuth 账号的上游请求收敛为一台 Ubuntu x86_64 主机上的
-Codex CLI 0.153.4 TUI，而不是暴露各下游客户端的系统、版本和传输栈差异。
+`ice` 分支把同一 OAuth 账号的上游请求收敛为上游捕获的
+Codex CLI 0.154.0 TUI 身份，而不是暴露各下游客户端的系统、版本和传输栈差异。
 这只改变上游可见身份，不改变账号选择、会话黏性、计费或响应翻译。
 
 当前固定应用身份为：
 
-- `User-Agent: codex-tui/0.153.4 (Ubuntu 22.4.0; x86_64) vscode/1.135.0 (codex-tui; 0.153.4)`
+- `User-Agent: codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.154.0)`
 - `Originator: codex-tui`
-- 缺失时补 `Version: 0.153.4`
+- 缺失时补 `Version: 0.154.0`
 - 缺失时补 `X-Codex-Beta-Features: remote_compaction_v2`
 
 > 2026-09-05：应用层身份从 0.147.0 升到 0.153.4。OpenAI 后端对
@@ -25,6 +25,10 @@ Codex CLI 0.153.4 TUI，而不是暴露各下游客户端的系统、版本和�
 > 近 14 天真实 codex-tui 0.153.4 流量，`TERM=dumb` 在真实种群中不存在
 > （服务器/CI 特征），该字符串是观测到请求量最高的真实 Linux 0.153.4 UA；
 > 保持 Linux 平台与 reqwest/OpenSSL ClientHello 基线自洽。
+>
+> 2026-09-16：应用层身份随上游合并升到 0.154.0，UA 同时换成上游捕获的
+> Mac OS/iTerm 字符串（放弃自组的 Ubuntu/vscode 字符串，与上游观测身份保持
+> 一致）；TLS ClientHello 基线不变。
 
 OAuth 请求默认强制使用这一组身份；管理员显式设置
 `codex-header-defaults.user-agent` 或开启 `disable-codex-cloaking` 时仍按配置处理。
