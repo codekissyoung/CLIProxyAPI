@@ -179,6 +179,35 @@ Key conflict sites are tagged in code with `// ice divergence: ...`.
       on the HTTP/SSE/compact/WS/images paths, so confused identifiers
       never leak to the client.
 
+16. **xAI native Grok CLI passthrough** (2026-07-24, commit 25c4825b;
+    `xai_executor_request.go` `xaiIsNativeGrokCLIResponsesRequest`,
+    `prepareNativeGrokCLIResponsesRequest`, `nativeGrokCLI`,
+    `grokCLIClientVersion`; `xai_executor_execute.go`,
+    `xai_executor_stream.go`)
+    Requests identified as native Grok CLI (Responses source format plus the
+    Grok CLI user-agent token or client-identifier header) skip the
+    normalization pipeline: reasoning-summary normalization, namespace
+    restoring, upstream's `webSearchAlias` restore, and the internal x_search
+    response filter are all gated behind `!prepared.nativeGrokCLI`, and the
+    CLI's own `x-client-version`/UA is forwarded instead of the pinned
+    constant. When upstream touches those per-event transform chains, keep
+    the `nativeGrokCLI` gate and merge upstream's new transforms inside it
+    (the `webSearchAlias` restore merged this way on 2026-09-19).
+
+## Translators (internal/translator)
+
+17. **Codex request sanitize + strip logging** (2026-07-23, commit 70a56375;
+    `codex/openai/responses/codex_openai-responses_request.go`
+    `SanitizeCodexResponsesRequest`, shared by the Interactions translator)
+    Extracted the Codex-bound cleanup into a shared exported function and
+    widened the strip list (presence_penalty, frequency_penalty,
+    context_management, reasoning_effort, input[].status) beyond upstream's,
+    because unsupported params are rejected upstream with 400s that add
+    failure signals to pool accounts; every sanitized request logs the
+    stripped field names at warn level for Loki. Upstream's service_tier
+    normalization (fast→priority, ultrafast passthrough; commit 859c4865)
+    is merged inside this function — keep both on future conflicts.
+
 ## Config / docs
 
 12. **`config.example.yaml`** — `session-affinity-ttl: "24h"` (see #7).

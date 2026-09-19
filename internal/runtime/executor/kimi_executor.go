@@ -133,6 +133,7 @@ func (e *KimiExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req
 
 	// Strip kimi- prefix and any [1m] suffix for upstream API
 	upstreamModel := normalizeKimiUpstreamModel(baseModel)
+	reporter.SetUpstreamModel(upstreamModel)
 	body, err = sjson.SetBytes(body, "model", upstreamModel)
 	if err != nil {
 		return resp, fmt.Errorf("kimi executor: failed to set model in payload: %w", err)
@@ -212,6 +213,7 @@ func (e *KimiExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req
 		return resp, err
 	}
 	helps.AppendAPIResponseChunk(ctx, e.cfg, data)
+	reporter.ObserveResponseModel(data)
 	reporter.Publish(ctx, helps.ParseOpenAIUsage(data))
 	var param any
 	// Note: TranslateNonStream uses req.Model (original with suffix) to preserve
@@ -261,6 +263,7 @@ func (e *KimiExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Aut
 
 	// Strip kimi- prefix and any [1m] suffix for upstream API
 	upstreamModel := normalizeKimiUpstreamModel(baseModel)
+	reporter.SetUpstreamModel(upstreamModel)
 	body, err = sjson.SetBytes(body, "model", upstreamModel)
 	if err != nil {
 		return nil, fmt.Errorf("kimi executor: failed to set model in payload: %w", err)
@@ -353,6 +356,7 @@ func (e *KimiExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Aut
 		for scanner.Scan() {
 			line := scanner.Bytes()
 			helps.AppendAPIResponseChunk(ctx, e.cfg, line)
+			reporter.ObserveResponseModel(line)
 			streamUsage.ObserveOpenAIStream(line)
 			chunks := helps.TranslateStreamWithClaudeInputTokens(ctx, to, responseFormat, req.Model, opts.OriginalRequest, body, bytes.Clone(line), &param, claudeInputTokens)
 			for i := range chunks {
@@ -397,6 +401,7 @@ func (e *KimiExecutor) executeResponses(ctx context.Context, auth *cliproxyauth.
 
 	body := bytes.Clone(req.Payload)
 	upstreamModel := normalizeKimiUpstreamModel(baseModel)
+	reporter.SetUpstreamModel(upstreamModel)
 	var errSet error
 	body, errSet = sjson.SetBytes(body, "model", upstreamModel)
 	if errSet != nil {
@@ -476,6 +481,7 @@ func (e *KimiExecutor) executeResponses(ctx context.Context, auth *cliproxyauth.
 		return resp, errRead
 	}
 	helps.AppendAPIResponseChunk(ctx, e.cfg, data)
+	reporter.ObserveResponseModel(data)
 
 	if usage, ok := helps.ParseCodexUsage(data); ok && (usage.TotalTokens > 0 || usage.InputTokens > 0) {
 		reporter.Publish(ctx, usage)
@@ -506,6 +512,7 @@ func (e *KimiExecutor) executeResponsesStream(ctx context.Context, auth *cliprox
 
 	body := bytes.Clone(req.Payload)
 	upstreamModel := normalizeKimiUpstreamModel(baseModel)
+	reporter.SetUpstreamModel(upstreamModel)
 	var errSet error
 	body, errSet = sjson.SetBytes(body, "model", upstreamModel)
 	if errSet != nil {
@@ -614,6 +621,7 @@ func (e *KimiExecutor) executeResponsesStream(ctx context.Context, auth *cliprox
 		for scanner.Scan() {
 			line := scanner.Bytes()
 			helps.AppendAPIResponseChunk(ctx, e.cfg, line)
+			reporter.ObserveResponseModel(line)
 
 			if bytes.HasPrefix(line, dataTag) {
 				dataBytes := bytes.TrimSpace(line[len(dataTag):])
