@@ -2183,11 +2183,49 @@ func isContentPolicyRefusalMarker(value string) bool {
 	return ok
 }
 
+// permissionDeniedSafetyRefusalCode and safetyRefusalSentence match the
+// xAI/Grok moderation shape {"code":"permission-denied","error":"I can't help
+// with that request."} (observed 2026-09-20 as HTTP 403 from the Grok Build
+// channel, fanned out across four pooled accounts before this classification
+// existed). A bare permission-denied code can also signal a genuine credential
+// or resource-permission failure, which must keep its rotation and cooldown
+// semantics, so the code only reclassifies when paired with the upstream's
+// safety-refusal sentence.
+const permissionDeniedSafetyRefusalCode = "permission-denied"
+const safetyRefusalSentence = "i can't help with that request"
+
+func isPermissionDeniedSafetyRefusal(code, message string) bool {
+	return strings.EqualFold(strings.TrimSpace(code), permissionDeniedSafetyRefusalCode) &&
+		strings.Contains(strings.ToLower(message), safetyRefusalSentence)
+}
+
+func isPermissionDeniedSafetyRefusalBody(body string) bool {
+	denied := false
+	for _, path := range []string{"error.code", "code", "response.error.code", "body.error.code", "detail.code"} {
+		if strings.EqualFold(strings.TrimSpace(gjson.Get(body, path).String()), permissionDeniedSafetyRefusalCode) {
+			denied = true
+			break
+		}
+	}
+	if !denied {
+		return false
+	}
+	for _, path := range []string{"error", "error.message", "message", "response.error.message", "body.error.message", "detail", "detail.message"} {
+		if strings.Contains(strings.ToLower(gjson.Get(body, path).String()), safetyRefusalSentence) {
+			return true
+		}
+	}
+	return false
+}
+
 // isContentPolicyRefusalError reports whether err is an upstream
 // moderation/safety refusal. Matching is body-based rather than status-based
 // because the same cyber_policy rejection was observed as 400 on the SSE
 // error path and as 502 through the websocket disconnect channel (fork
-// fe28d582). Credential/quota-authoritative statuses (401/402/429) are never
+// fe28d582). The xAI/Grok refusal carries no marker word, so a generic
+// permission-denied code only reclassifies when paired with the upstream's
+// safety-refusal sentence (see permissionDeniedSafetyRefusalCode).
+// Credential/quota-authoritative statuses (401/402/429) are never
 // reclassified: an auth or billing failure must keep its cooldown semantics
 // even if the body happens to quote a marker. Errors without an HTTP status
 // are excluded so transport failures cannot masquerade as content refusals.
@@ -2202,8 +2240,13 @@ func isContentPolicyRefusalError(err error) bool {
 		return false
 	}
 	var authErr *Error
-	if errors.As(err, &authErr) && authErr != nil && isContentPolicyRefusalMarker(authErr.Code) {
-		return true
+	if errors.As(err, &authErr) && authErr != nil {
+		if isContentPolicyRefusalMarker(authErr.Code) {
+			return true
+		}
+		if isPermissionDeniedSafetyRefusal(authErr.Code, authErr.Message) {
+			return true
+		}
 	}
 	body := strings.TrimSpace(err.Error())
 	if body == "" {
@@ -2221,6 +2264,9 @@ func isContentPolicyRefusalError(err error) bool {
 				return true
 			}
 		}
+		if isPermissionDeniedSafetyRefusalBody(body) {
+			return true
+		}
 	}
 	// Fallback for non-JSON bodies or marker placements the paths above miss:
 	// match only the quoted marker form so prose mentioning moderation cannot
@@ -2230,6 +2276,10 @@ func isContentPolicyRefusalError(err error) bool {
 		if strings.Contains(lower, `"`+marker+`"`) {
 			return true
 		}
+	}
+	if strings.Contains(lower, `"`+permissionDeniedSafetyRefusalCode+`"`) &&
+		strings.Contains(lower, safetyRefusalSentence) {
+		return true
 	}
 	return false
 }

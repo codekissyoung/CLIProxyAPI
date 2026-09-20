@@ -130,6 +130,23 @@ Key conflict sites are tagged in code with `// ice divergence: ...`.
     by `filterExecutionModels` and would self-block the attempt holding the
     slot.
 
+16. **Content-policy refusal classification** (2026-08-28 `cbdb4590`;
+    `conductor_cooldown.go` `contentPolicyRefusalMarkers` /
+    `isContentPolicyRefusalError` / `logContentPolicyRefusal`;
+    pinned by `conductor_content_policy_test.go`)
+    Upstream moderation/safety refusals are classified request-invalid: no
+    cross-account fan-out (retrying the same violating payload on another
+    account amplifies one rejection into a pool-wide risk signal), no
+    credential cooldown, one sanitized warn log per refusal. Matching is
+    body-based (marker allowlist in code/type/message positions plus a quoted
+    substring fallback), never status-based, and never reclassifies
+    401/402/429. Extended 2026-09-20 for the xAI/Grok shape
+    `{"code":"permission-denied","error":"I can't help with that request."}`
+    (observed fanning out across four pooled accounts as HTTP 403): a generic
+    `permission-denied` code only reclassifies when paired with the upstream's
+    safety-refusal sentence, so genuine credential/permission failures keep
+    their rotation and cooldown semantics.
+
 ## Executors (internal/runtime/executor)
 
 8. **Per-auth+proxy Codex transport cache** (`codex_executor_request.go`,

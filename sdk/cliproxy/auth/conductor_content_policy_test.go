@@ -63,6 +63,49 @@ func TestIsRequestInvalidErrorContentPolicyRefusal(t *testing.T) {
 			want: true,
 		},
 		{
+			// xAI/Grok moderation shape observed 2026-09-20 on the Grok Build
+			// channel: the refusal carries no marker word, only a generic
+			// permission-denied code paired with the safety-refusal sentence.
+			name: "403 xai permission-denied safety refusal",
+			err:  invalidParamStatusError{code: 403, msg: `{"code":"permission-denied","error":"I can't help with that request."}`},
+			want: true,
+		},
+		{
+			name: "403 permission-denied refusal nested in error object",
+			err:  invalidParamStatusError{code: 403, msg: `{"error":{"code":"permission-denied","message":"I can't help with that request."}}`},
+			want: true,
+		},
+		{
+			name: "conductor Error carrying permission-denied refusal",
+			err:  &Error{Code: "permission-denied", Message: `{"code":"permission-denied","error":"I can't help with that request."}`, HTTPStatus: 403},
+			want: true,
+		},
+		{
+			name: "non-JSON body with quoted denied code and sentence",
+			err:  invalidParamStatusError{code: 403, msg: `upstream error: "permission-denied" I can't help with that request.`},
+			want: true,
+		},
+		{
+			name: "403 bare permission-denied still rotates",
+			err:  invalidParamStatusError{code: 403, msg: `{"code":"permission-denied","error":"Permission denied on resource project/123."}`},
+			want: false,
+		},
+		{
+			name: "403 refusal sentence without denied code still rotates",
+			err:  invalidParamStatusError{code: 403, msg: `{"error":{"message":"I can't help with that request."}}`},
+			want: false,
+		},
+		{
+			name: "402 permission-denied refusal keeps billing semantics",
+			err:  invalidParamStatusError{code: 402, msg: `{"code":"permission-denied","error":"I can't help with that request."}`},
+			want: false,
+		},
+		{
+			name: "401 permission-denied refusal keeps auth semantics",
+			err:  invalidParamStatusError{code: 401, msg: `{"code":"permission-denied","error":"I can't help with that request."}`},
+			want: false,
+		},
+		{
 			name: "401 keeps credential semantics even with marker",
 			err:  invalidParamStatusError{code: 401, msg: `{"error":{"code":"moderation_blocked"}}`},
 			want: false,
