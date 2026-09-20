@@ -119,6 +119,10 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 		}
 	}()
 	helps.RecordAPIResponseMetadata(ctx, e.cfg, httpResp.StatusCode, httpResp.Header.Clone())
+	// ice divergence: passive X-Codex-Turn-State shape capture (see helps/codex_turnstate.go).
+	if e.cfg != nil && e.cfg.Codex.TurnStateCapture {
+		helps.ObserveTurnState(authID, baseModel, httpResp.Header.Get("X-Codex-Turn-State"))
+	}
 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
 		b, _ := io.ReadAll(httpResp.Body)
 		b = applyCodexIdentityConfuseResponsePayload(b, identityState)

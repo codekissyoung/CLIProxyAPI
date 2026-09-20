@@ -183,6 +183,9 @@ type CodexConfig struct {
 	IdentityConfuse bool `yaml:"identity-confuse" json:"identity-confuse"`
 	// DisableCodexCloaking disables forcing the official Codex identity headers on HTTP/SSE and WebSocket requests.
 	DisableCodexCloaking bool `yaml:"disable-codex-cloaking" json:"disable-codex-cloaking"`
+	// TurnStateCapture enables passive capture of the X-Codex-Turn-State response header shape
+	// (length class, counts, and timestamps only; the opaque blob itself is never stored or logged).
+	TurnStateCapture bool `yaml:"turn-state-capture" json:"turn-state-capture"`
 	// StreamBootstrapBuffering holds back the frames that arrive before generation starts, none of
 	// which the client has seen anything from - the handshake (response.created, response.in_progress,
 	// the websocket metadata frames), keepalive heartbeats, and the *.added announcements of an item

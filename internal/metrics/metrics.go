@@ -76,6 +76,15 @@ var (
 		Name: "cliproxy_account_invalidations_total",
 		Help: "Cumulative number of times this account's credential was detected revoked on the refresh path.",
 	}, []string{"auth_id"})
+
+	// CodexTurnStateObservationsTotal counts X-Codex-Turn-State response header
+	// observations per account and model, labeled by the bounded shape class
+	// (normal/degraded/other/absent) derived from the header length. The opaque
+	// header blob itself is never recorded in any label value.
+	CodexTurnStateObservationsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "cliproxy_codex_turnstate_observations_total",
+		Help: "Cumulative number of observed X-Codex-Turn-State header shapes, labeled by bounded shape class.",
+	}, []string{"auth_id", "model", "shape"})
 )
 
 // RecordAccountPick increments the per-account request counter. No-op if
@@ -140,4 +149,14 @@ func RecordAccountInvalidation(authID string) {
 		return
 	}
 	AccountInvalidationsTotal.WithLabelValues(authID).Inc()
+}
+
+// RecordCodexTurnStateObservation increments the turn-state shape counter for
+// one observed X-Codex-Turn-State header. No-op if authID is empty (defensive:
+// some callers may not have a resolved auth yet).
+func RecordCodexTurnStateObservation(authID, model, shape string) {
+	if authID == "" {
+		return
+	}
+	CodexTurnStateObservationsTotal.WithLabelValues(authID, model, shape).Inc()
 }

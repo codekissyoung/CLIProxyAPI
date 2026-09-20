@@ -299,6 +299,16 @@ codex:
   identity-confuse: false
   # Disable forcing the official Codex User-Agent and Originator headers on HTTP/SSE and WebSocket requests.
   disable-codex-cloaking: false
+  # When true, passively capture the shape of the X-Codex-Turn-State response header on
+  # chatgpt.com codex responses: the length class (292 chars = normal, 312 = degraded,
+  # anything else = other, missing = absent), per-account+model counts, and first/last
+  # observation timestamps. Observation only - no request or response behavior changes.
+  # The opaque header blob itself is never stored, logged, exported, or exposed; it is
+  # used for its length and immediately discarded. Captured shapes are visible via the
+  # cliproxy_codex_turnstate_observations_total metric and the management endpoint
+  # GET /v0/management/codex-turn-tickets. The store is in-memory and resets on restart.
+  # Default: false
+  turn-state-capture: false
   # Hold back the frames that carry nothing the client has seen - the handshake (response.created,
   # response.in_progress, the websocket metadata frames), keepalive heartbeats, and the *.added
   # announcements of an item or part that is still empty - until the upstream emits its first

@@ -255,3 +255,30 @@ Key conflict sites are tagged in code with `// ice divergence: ...`.
     reserved against upstream spoofing in `cpaReservedResponseHeaders`.
     Local operational tooling for ai-relay pool testing; upstream has no
     equivalent — keep on merge.
+
+18. **Codex turn-state passive capture** (2026-09-21;
+    `internal/runtime/executor/helps/codex_turnstate.go`, hook points in
+    `codex_executor_execute.go` / `codex_executor_stream.go`,
+    `internal/config/config_types.go` `Codex.TurnStateCapture`
+    (`codex.turn-state-capture`),
+    `internal/metrics/metrics.go`
+    `cliproxy_codex_turnstate_observations_total`,
+    `internal/api/handlers/management/codex_turnstate.go` +
+    `internal/api/server_management.go`
+    (`GET /v0/management/codex-turn-tickets`);
+    pinned by `helps/codex_turnstate_test.go`,
+    `management/codex_turnstate_test.go`)
+    When `codex.turn-state-capture: true` (default false), the Codex
+    executor observes the `X-Codex-Turn-State` response header on
+    chatgpt.com codex responses and records only its shape: the length
+    class (292 chars = `normal`, 312 = `degraded`, anything else =
+    `other`, missing = `absent`), per-account+model counts, and
+    first/last observation timestamps. Shape metadata only, never the
+    blob: the opaque Fernet value (`gAAAAA` prefix) is used for its
+    length and immediately discarded — it is never stored, logged,
+    exported as a metric label, or exposed through the management
+    endpoint (asserted by the snapshot-JSON safety test). Observation
+    only; no request/response behavior changes. The store is in-memory
+    with no TTL (cardinality bounded by accounts x models) and resets
+    on restart. Operational observability for upstream turn-state
+    degradation; upstream has no equivalent — keep on merge.
