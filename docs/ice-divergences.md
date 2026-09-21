@@ -256,29 +256,54 @@ Key conflict sites are tagged in code with `// ice divergence: ...`.
     Local operational tooling for ai-relay pool testing; upstream has no
     equivalent — keep on merge.
 
-18. **Codex turn-state passive capture** (2026-09-21;
-    `internal/runtime/executor/helps/codex_turnstate.go`, hook points in
-    `codex_executor_execute.go` / `codex_executor_stream.go`,
+18. **Codex turn-state capture + injection** (2026-09-21; injection added
+    2026-09-21;
+    `internal/runtime/executor/helps/codex_turnstate.go`,
+    `internal/runtime/executor/helps/codex_turnstate_inject.go`,
+    hook points in `codex_executor_execute.go` /
+    `codex_executor_stream.go`,
     `internal/config/config_types.go` `Codex.TurnStateCapture`
-    (`codex.turn-state-capture`),
+    (`codex.turn-state-capture`) and `Codex.TurnStateInject`
+    (`codex.turn-state-inject`),
     `internal/metrics/metrics.go`
     `cliproxy_codex_turnstate_observations_total`,
+    `cliproxy_codex_turnstate_inject_decisions_total`,
     `internal/api/handlers/management/codex_turnstate.go` +
     `internal/api/server_management.go`
     (`GET /v0/management/codex-turn-tickets`);
     pinned by `helps/codex_turnstate_test.go`,
-    `management/codex_turnstate_test.go`)
+    `helps/codex_turnstate_inject_test.go`,
+    `management/codex_turnstate_test.go`,
+    `internal/config/codex_turnstate_inject_test.go`)
     When `codex.turn-state-capture: true` (default false), the Codex
     executor observes the `X-Codex-Turn-State` response header on
     chatgpt.com codex responses and records only its shape: the length
     class (292 chars = `normal`, 312 = `degraded`, anything else =
     `other`, missing = `absent`), per-account+model counts, and
-    first/last observation timestamps. Shape metadata only, never the
-    blob: the opaque Fernet value (`gAAAAA` prefix) is used for its
-    length and immediately discarded — it is never stored, logged,
-    exported as a metric label, or exposed through the management
-    endpoint (asserted by the snapshot-JSON safety test). Observation
-    only; no request/response behavior changes. The store is in-memory
-    with no TTL (cardinality bounded by accounts x models) and resets
-    on restart. Operational observability for upstream turn-state
-    degradation; upstream has no equivalent — keep on merge.
+    first/last observation timestamps. A `normal` observation also
+    retains the opaque Fernet blob (`gAAAAA` prefix) in an unexported
+    field as the bucket's injection ticket; the blob is never logged,
+    exported as a metric label, marshaled into the management snapshot
+    (copies are zeroed), or otherwise exposed (asserted by the
+    snapshot-JSON and decision-log safety tests). Capture alone changes
+    no request/response behavior.
+    `codex.turn-state-inject` (default/empty/`off`) enables injection:
+    `dry-run` runs the full decision tree and logs every decision
+    (auth_id, model, action, dry_run — never the blob) without touching
+    requests; `enforce` additionally applies inject/replace decisions to
+    the outbound request header. Injection requires capture (the gate is
+    explicit even though an empty store would decide the same). The
+    decision tree on the client's `X-Codex-Turn-State` request header:
+    292 chars -> `keep_client`; 312 chars -> `replace` with the stored
+    ticket when injectable, else `keep_client`; absent -> `inject` the
+    stored ticket when injectable, else `pass_no_ticket`; any other
+    length -> `keep_unknown` (never touched). A ticket is injectable
+    while its assumed 1h TTL (the blob carries no readable expiry, so
+    the TTL is an operational assumption) has more than a 10m safety
+    margin remaining; tickets are reusable and never consumed. The store
+    is in-memory with no eviction (cardinality bounded by accounts x
+    models) and resets on restart. Mirrors the proven sub2api
+    account-quality design: accounts in good standing keep receiving
+    292-char states, flagged accounts mostly get 312, and injecting a
+    stored 292 carries accounts through degraded windows. Upstream has
+    no equivalent — keep on merge.

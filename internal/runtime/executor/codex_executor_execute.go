@@ -95,6 +95,13 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 		authLabel = auth.Label
 		authType, authValue = auth.AccountInfo()
 	}
+	// ice divergence: codex turn-state injection (decision tree over the captured NORMAL ticket; see helps/codex_turnstate_inject.go).
+	if e.cfg != nil && e.cfg.Codex.TurnStateCapture {
+		if injectEnabled, injectDryRun := e.cfg.Codex.TurnStateInjectionMode(); injectEnabled {
+			injectAction, injectTicket := helps.DecideTurnStateInjection(authID, baseModel, httpReq.Header.Get(helps.CodexTurnStateHeader), injectDryRun)
+			helps.ApplyTurnStateInjectionDecision(httpReq.Header, injectAction, injectTicket, injectDryRun)
+		}
+	}
 	helps.RecordAPIRequest(ctx, e.cfg, helps.UpstreamRequestLog{
 		URL:       url,
 		Method:    http.MethodPost,
@@ -121,7 +128,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	helps.RecordAPIResponseMetadata(ctx, e.cfg, httpResp.StatusCode, httpResp.Header.Clone())
 	// ice divergence: passive X-Codex-Turn-State shape capture (see helps/codex_turnstate.go).
 	if e.cfg != nil && e.cfg.Codex.TurnStateCapture {
-		helps.ObserveTurnState(authID, baseModel, httpResp.Header.Get("X-Codex-Turn-State"))
+		helps.ObserveTurnState(authID, baseModel, httpResp.Header.Get(helps.CodexTurnStateHeader))
 	}
 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
 		b, _ := io.ReadAll(httpResp.Body)

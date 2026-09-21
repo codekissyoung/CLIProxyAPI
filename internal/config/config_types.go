@@ -184,8 +184,13 @@ type CodexConfig struct {
 	// DisableCodexCloaking disables forcing the official Codex identity headers on HTTP/SSE and WebSocket requests.
 	DisableCodexCloaking bool `yaml:"disable-codex-cloaking" json:"disable-codex-cloaking"`
 	// TurnStateCapture enables passive capture of the X-Codex-Turn-State response header shape
-	// (length class, counts, and timestamps only; the opaque blob itself is never stored or logged).
+	// (length class, counts, and timestamps; the NORMAL-shape blob is additionally retained
+	// in-memory as an injection ticket, but is never logged, exported, or exposed).
 	TurnStateCapture bool `yaml:"turn-state-capture" json:"turn-state-capture"`
+	// TurnStateInject selects the turn-state injection mode: "off" (default/empty),
+	// "dry-run" (run the decision tree and log decisions without touching requests),
+	// or "enforce" (additionally apply inject/replace decisions to outbound requests).
+	TurnStateInject string `yaml:"turn-state-inject" json:"turn-state-inject"`
 	// StreamBootstrapBuffering holds back the frames that arrive before generation starts, none of
 	// which the client has seen anything from - the handshake (response.created, response.in_progress,
 	// the websocket metadata frames), keepalive heartbeats, and the *.added announcements of an item
@@ -250,6 +255,31 @@ func (c *CodexConfig) StreamBootstrapTimeoutDuration() time.Duration {
 		}
 	}
 	return DefaultCodexStreamBootstrapTimeout
+}
+
+// Codex turn-state injection modes for CodexConfig.TurnStateInject.
+const (
+	CodexTurnStateInjectOff     = "off"
+	CodexTurnStateInjectDryRun  = "dry-run"
+	CodexTurnStateInjectEnforce = "enforce"
+)
+
+// TurnStateInjectionMode resolves the turn-state-inject knob. enabled is false
+// for "" / "off" / unknown values (safe default); "dry-run" runs the full
+// decision tree and logs every decision without mutating requests; "enforce"
+// additionally applies inject/replace decisions to outbound requests.
+func (c *CodexConfig) TurnStateInjectionMode() (enabled bool, dryRun bool) {
+	if c == nil {
+		return false, false
+	}
+	switch strings.ToLower(strings.TrimSpace(c.TurnStateInject)) {
+	case CodexTurnStateInjectDryRun:
+		return true, true
+	case CodexTurnStateInjectEnforce:
+		return true, false
+	default:
+		return false, false
+	}
 }
 
 // CodexLiveMediaRelayConfig configures the in-process Codex Live WebRTC gateway.

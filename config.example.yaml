@@ -303,12 +303,28 @@ codex:
   # chatgpt.com codex responses: the length class (292 chars = normal, 312 = degraded,
   # anything else = other, missing = absent), per-account+model counts, and first/last
   # observation timestamps. Observation only - no request or response behavior changes.
-  # The opaque header blob itself is never stored, logged, exported, or exposed; it is
-  # used for its length and immediately discarded. Captured shapes are visible via the
+  # The NORMAL-shape blob itself is additionally retained in-memory as the bucket's
+  # injection ticket; it is never logged, exported as a metric label, or exposed through
+  # the management API. Captured shapes are visible via the
   # cliproxy_codex_turnstate_observations_total metric and the management endpoint
   # GET /v0/management/codex-turn-tickets. The store is in-memory and resets on restart.
   # Default: false
   turn-state-capture: false
+  # Turn-state ticket injection mode: "off" (default), "dry-run", or "enforce".
+  # Requires turn-state-capture: true (only capture fills the ticket store).
+  # A stored NORMAL ticket is reusable within its assumed 1h TTL and is never consumed
+  # by use; a 10m safety margin applies, so tickets with < 10m remaining are not injected.
+  # Decision tree on the client's X-Codex-Turn-State request header:
+  #   client 292 chars (normal)   -> keep_client
+  #   client 312 chars (degraded) -> replace with the stored ticket if injectable, else keep_client
+  #   client header absent        -> inject the stored ticket if injectable, else pass_no_ticket
+  #   any other length            -> keep_unknown (conservative, never touched)
+  # "dry-run" runs the full decision tree and logs every decision (auth_id, model,
+  # action, dry_run - never the blob) without touching requests. "enforce" additionally
+  # sets the header for inject/replace decisions. Decisions are counted in
+  # cliproxy_codex_turnstate_inject_decisions_total{auth_id,model,action,dry_run}.
+  # Unknown values are treated as "off".
+  turn-state-inject: "off"
   # Hold back the frames that carry nothing the client has seen - the handshake (response.created,
   # response.in_progress, the websocket metadata frames), keepalive heartbeats, and the *.added
   # announcements of an item or part that is still empty - until the upstream emits its first

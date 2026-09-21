@@ -85,6 +85,15 @@ var (
 		Name: "cliproxy_codex_turnstate_observations_total",
 		Help: "Cumulative number of observed X-Codex-Turn-State header shapes, labeled by bounded shape class.",
 	}, []string{"auth_id", "model", "shape"})
+
+	// CodexTurnStateInjectDecisionsTotal counts injection decision-tree outcomes
+	// per account and model, labeled by the bounded action
+	// (keep_client/replace/inject/pass_no_ticket/keep_unknown) and whether the
+	// decision was made in dry-run mode. Ticket values are never label values.
+	CodexTurnStateInjectDecisionsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "cliproxy_codex_turnstate_inject_decisions_total",
+		Help: "Cumulative number of X-Codex-Turn-State injection decisions, labeled by action and dry_run.",
+	}, []string{"auth_id", "model", "action", "dry_run"})
 )
 
 // RecordAccountPick increments the per-account request counter. No-op if
@@ -159,4 +168,13 @@ func RecordCodexTurnStateObservation(authID, model, shape string) {
 		return
 	}
 	CodexTurnStateObservationsTotal.WithLabelValues(authID, model, shape).Inc()
+}
+
+// RecordCodexTurnStateInjectionDecision increments the injection decision
+// counter for one decision-tree outcome. No-op if authID is empty.
+func RecordCodexTurnStateInjectionDecision(authID, model, action string, dryRun bool) {
+	if authID == "" {
+		return
+	}
+	CodexTurnStateInjectDecisionsTotal.WithLabelValues(authID, model, action, strconv.FormatBool(dryRun)).Inc()
 }

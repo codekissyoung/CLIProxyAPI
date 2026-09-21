@@ -9,7 +9,8 @@ import (
 
 // GetCodexTurnTickets returns the passive X-Codex-Turn-State shape observations
 // collected since process start, keyed by account and model. Shape metadata
-// only: the opaque header blob is never captured, stored, or exposed.
+// only: stored injection tickets are unexported and zeroed in snapshots, so the
+// opaque header blob is never exposed here.
 func (h *Handler) GetCodexTurnTickets(c *gin.Context) {
 	if h == nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "handler not initialized"})
