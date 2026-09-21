@@ -29,70 +29,28 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 	}
 
 	baseModel := thinking.ParseSuffix(req.Model).ModelName
-	apiKey, baseURL := codexCreds(auth)
-	if baseURL == "" {
-		baseURL = "https://chatgpt.com/backend-api/codex"
-	}
 
 	reporter := helps.NewExecutorUsageReporter(ctx, e, baseModel, auth)
 	defer reporter.TrackFailure(ctx, &err)
 
-	from := opts.SourceFormat
-	responseFormat := cliproxyexecutor.ResponseFormatOrSource(opts)
-	preserveNativeOutput := helps.IsNativeCodexRequest(req.Payload, opts)
-	to := sdktranslator.FromString("codex")
-	originalPayloadSource := req.Payload
-	if len(opts.OriginalRequest) > 0 {
-		originalPayloadSource = opts.OriginalRequest
-	}
-	originalPayload := originalPayloadSource
-	isCompat := e.resolveCodexModelIsCompat(auth, req, baseModel)
-	originalTranslated, body := translateCodexRequestPair(from, to, baseModel, originalPayload, req.Payload, true, isCompat)
-
-	body, err = helps.ApplyRequestThinking(body, req, opts, from.String(), to.String(), e.Identifier())
+	prepared, err := e.prepareCodexWebsocketStream(ctx, auth, req, opts)
 	if err != nil {
 		return nil, err
 	}
-
-	requestedModel := helps.PayloadRequestedModel(opts, req.Model)
-	requestPath := helps.PayloadRequestPath(opts)
-	body = helps.ApplyPayloadConfigWithRequest(e.cfg, baseModel, to.String(), from.String(), "", body, originalTranslated, requestedModel, requestPath, opts.Headers)
-	body = helps.SetStringIfDifferent(body, "model", baseModel)
-	body = normalizeCodexInstructions(body, preserveNativeOutput)
-	if e.cfg == nil || e.cfg.DisableImageGeneration == config.DisableImageGenerationOff {
-		body = ensureImageGenerationTool(body, baseModel, auth, opts.Headers)
-	}
-	body = sanitizeOpenAIResponsesReasoningEncryptedContentWithCompat(ctx, "codex websockets executor", body, isCompat)
-	body = normalizeCodexWebsocketParallelToolCalls(body, opts.Headers)
-	body = helps.NormalizeCodexToolSchemas(body)
-	multiAgentV2Conflict := helps.HasCodexMultiAgentV2NamespaceConflict(body)
-	body, optimizeMultiAgentV2 := helps.OptimizeCodexMultiAgentV2RequestForAuth(ctx, opts.Headers, body, e.cfg, auth, baseModel)
-	body, replayScope, errReplay := applyCodexReasoningReplayCacheRequired(ctx, from, req, opts, body)
-	if errReplay != nil {
-		return nil, errReplay
-	}
-
-	httpURL := strings.TrimSuffix(baseURL, "/") + "/responses"
-	wsURL, err := buildCodexResponsesWebsocketURL(httpURL)
-	if err != nil {
-		return nil, err
-	}
-
-	body, wsHeaders, errPromptCache := applyCodexPromptCacheHeadersWithAuth(ctx, auth, from, req, body, opts.Headers)
-	if errPromptCache != nil {
-		return nil, errPromptCache
-	}
-	clientBody := body
-	var identityState codexIdentityConfuseState
-	upstreamBody, identityState := applyCodexIdentityConfuseBody(e.cfg, auth, originalPayloadSource, body)
-	helps.LogCodexRequestProfile(ctx, "codex-ws-stream", baseModel, upstreamBody)
-	if blockErr, blocked := codexContextRejectBlocked(ctx, e, "ws", baseModel, auth, opts, upstreamBody); blocked {
-		return nil, blockErr
-	}
+	from := prepared.from
+	responseFormat := prepared.responseFormat
+	to := prepared.to
+	preserveNativeOutput := prepared.preserveNativeOutput
+	originalPayload := prepared.originalPayload
+	clientBody := prepared.clientBody
+	upstreamBody := prepared.upstreamBody
+	wsURL := prepared.wsURL
+	wsHeaders := prepared.wsHeaders
+	identityState := prepared.identityState
+	replayScope := prepared.replayScope
+	optimizeMultiAgentV2 := prepared.optimizeMultiAgentV2
+	multiAgentV2Conflict := prepared.multiAgentV2Conflict
 	reporter.SetTranslatedReasoningEffort(clientBody, to.String())
-	wsHeaders = applyCodexWebsocketHeaders(ctx, wsHeaders, auth, apiKey, e.cfg, preserveNativeOutput, opts.Headers)
-	applyModelHeaderOverrides(wsHeaders, baseModel)
-	applyCodexIdentityConfuseHeaders(wsHeaders, &identityState)
 
 	var authID, authLabel, authType, authValue string
 	authID = auth.ID
@@ -293,6 +251,14 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 	if optimizeMultiAgentV2 || multiAgentV2Conflict {
 		sess.setMultiAgentV2Optimized(conn, optimizeMultiAgentV2 && !multiAgentV2Conflict)
 	}
+
+	if input := cliproxyexecutor.WebsocketInputFromContext(ctx); input != nil && e.cfg != nil && (e.cfg.Codex.ResponseSteering || e.cfg.CodexResponseSteering) {
+		return e.streamCodexDuplex(ctx, auth, req, opts, sess, conn, readCh, input, prepared, reporter, upstreamHeaders, unlockStreamSession), nil
+	}
+
+	// bootstrap 计时块本分支在写请求之前就初始化了（见上文 946bd7a3）：对端可以合法地
+	// 立刻应答，把时钟起点放到写之后会让快对端“在窗口打开前”就回包。上游这一版把它
+	// 放在写之后，属于我们已经修掉的 bug，这里不再重复声明。
 
 	claudeInputTokens := helps.NewClaudeInputTokenState(from, to, responseFormat, originalPayload)
 	var param any
@@ -791,4 +757,107 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 	}()
 
 	return &cliproxyexecutor.StreamResult{Headers: upstreamHeaders, Chunks: out}, nil
+}
+
+// codexWebsocketPrepared contains the request pipeline output shared by the
+// ordinary per-response stream and subsequent creates on a duplex connection.
+type codexWebsocketPrepared struct {
+	from                 sdktranslator.Format
+	responseFormat       sdktranslator.Format
+	to                   sdktranslator.Format
+	preserveNativeOutput bool
+	originalPayload      []byte
+	clientBody           []byte
+	upstreamBody         []byte
+	wsURL                string
+	wsHeaders            http.Header
+	identityState        codexIdentityConfuseState
+	replayScope          codexReasoningReplayScope
+	optimizeMultiAgentV2 bool
+	multiAgentV2Conflict bool
+}
+
+func (e *CodexWebsocketsExecutor) prepareCodexWebsocketStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (*codexWebsocketPrepared, error) {
+	baseModel := thinking.ParseSuffix(req.Model).ModelName
+	apiKey, baseURL := codexCreds(auth)
+	if baseURL == "" {
+		baseURL = "https://chatgpt.com/backend-api/codex"
+	}
+	var err error
+	from := opts.SourceFormat
+	responseFormat := cliproxyexecutor.ResponseFormatOrSource(opts)
+	preserveNativeOutput := helps.IsNativeCodexRequest(req.Payload, opts)
+	to := sdktranslator.FromString("codex")
+	originalPayloadSource := req.Payload
+	if len(opts.OriginalRequest) > 0 {
+		originalPayloadSource = opts.OriginalRequest
+	}
+	originalPayload := originalPayloadSource
+	isCompat := e.resolveCodexModelIsCompat(auth, req, baseModel)
+	originalTranslated, body := translateCodexRequestPair(from, to, baseModel, originalPayload, req.Payload, true, isCompat)
+
+	body, err = helps.ApplyRequestThinking(body, req, opts, from.String(), to.String(), e.Identifier())
+	if err != nil {
+		return nil, err
+	}
+
+	requestedModel := helps.PayloadRequestedModel(opts, req.Model)
+	requestPath := helps.PayloadRequestPath(opts)
+	body = helps.ApplyPayloadConfigWithRequest(e.cfg, baseModel, to.String(), from.String(), "", body, originalTranslated, requestedModel, requestPath, opts.Headers)
+	body = helps.SetStringIfDifferent(body, "model", baseModel)
+	body = normalizeCodexInstructions(body, preserveNativeOutput)
+	if e.cfg == nil || e.cfg.DisableImageGeneration == config.DisableImageGenerationOff {
+		body = ensureImageGenerationTool(body, baseModel, auth, opts.Headers)
+	}
+	body = sanitizeOpenAIResponsesReasoningEncryptedContentWithCompat(ctx, "codex websockets executor", body, isCompat)
+	body = normalizeCodexWebsocketParallelToolCalls(body, opts.Headers)
+	body = helps.NormalizeCodexToolSchemas(body)
+	multiAgentV2Conflict := helps.HasCodexMultiAgentV2NamespaceConflict(body)
+	body, optimizeMultiAgentV2 := helps.OptimizeCodexMultiAgentV2RequestForAuth(ctx, opts.Headers, body, e.cfg, auth, baseModel)
+	body, replayScope, errReplay := applyCodexReasoningReplayCacheRequired(ctx, from, req, opts, body)
+	if errReplay != nil {
+		return nil, errReplay
+	}
+
+	httpURL := strings.TrimSuffix(baseURL, "/") + "/responses"
+	wsURL, err := buildCodexResponsesWebsocketURL(httpURL)
+	if err != nil {
+		return nil, err
+	}
+
+	// 本分支用 auth 感知版本：prompt_cache_key / installation identity 按选中的账号重映射，
+	// 且不再依赖 fill-first / session-affinity（上游的 WithContext 版没有 auth，换回去会让
+	// 同一个 cache key 跨账号复用）。
+	body, wsHeaders, errPromptCache := applyCodexPromptCacheHeadersWithAuth(ctx, auth, from, req, body, opts.Headers)
+	if errPromptCache != nil {
+		return nil, errPromptCache
+	}
+	clientBody := body
+	var identityState codexIdentityConfuseState
+	upstreamBody, identityState := applyCodexIdentityConfuseBody(e.cfg, auth, originalPayloadSource, body)
+	// 本分支补丁：请求画像日志 + 上下文拒绝闸门。上游重构 prepare 时没有这两段，
+	// 漏掉会让 ws 路径静默绕过 HTTP 路径同款的保护。
+	helps.LogCodexRequestProfile(ctx, "codex-ws-stream", baseModel, upstreamBody)
+	if blockErr, blocked := codexContextRejectBlocked(ctx, e, "ws", baseModel, auth, opts, upstreamBody); blocked {
+		return nil, blockErr
+	}
+	wsHeaders = applyCodexWebsocketHeaders(ctx, wsHeaders, auth, apiKey, e.cfg, preserveNativeOutput, opts.Headers)
+	applyModelHeaderOverrides(wsHeaders, baseModel)
+	applyCodexIdentityConfuseHeaders(wsHeaders, &identityState)
+
+	return &codexWebsocketPrepared{
+		from:                 from,
+		responseFormat:       responseFormat,
+		to:                   to,
+		preserveNativeOutput: preserveNativeOutput,
+		originalPayload:      originalPayload,
+		clientBody:           clientBody,
+		upstreamBody:         upstreamBody,
+		wsURL:                wsURL,
+		wsHeaders:            wsHeaders,
+		identityState:        identityState,
+		replayScope:          replayScope,
+		optimizeMultiAgentV2: optimizeMultiAgentV2,
+		multiAgentV2Conflict: multiAgentV2Conflict,
+	}, nil
 }

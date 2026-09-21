@@ -512,7 +512,7 @@ func GetStaticModelDefinitionsByChannel(channel string) []*ModelInfo {
 		return GetQwenModels()
 	case "iflow":
 		return GetIFlowModels()
-	case "kimi":
+	case "kimi", "kimi-ai", "kimi.ai", "kimi.com":
 		return GetKimiModels()
 	case "antigravity":
 		return GetAntigravityModels()
