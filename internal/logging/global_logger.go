@@ -39,6 +39,8 @@ var logFieldOrder = []string{
 	"auth_id", "auth_label", "http_status", "error_msg", "session", "transport", "req_bytes",
 	"credential", "connection", "proxy_scheme", "remote_transport",
 	"media_session_id", "call_id", "peer", "state", "reason",
+	// ice divergence: turn-state injection decision fields.
+	"action", "dry_run",
 }
 
 var quotedLogFields = map[string]struct{}{
