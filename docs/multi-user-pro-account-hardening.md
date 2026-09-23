@@ -38,6 +38,39 @@ Codex CLI 0.155.1 TUI 身份，而不是暴露各下游客户端的系统、版�
 > codex-tui 的主流版本。上游 executor 身份此时仍是 0.154.0，本次为 ice 侧
 > 先行。TLS ClientHello 基线不变（仍为 0.147.0 捕获）。
 
+## 升版本时怎么选 UA（bump 前必读）
+
+历次 bump 都是「跟随真实客户端群体」，不是自己编字符串。固定口径：
+
+1. **数据源用 `usage_logs.user_agent`**（中转库，样本最全；控制机 `ice-db-server`
+   是实时 standby，本机只读查即可）。源站 nginx 日志只作交叉验证，而且它是
+   **按 vhost 分文件**的（`api.icodeeasy.cc.access.log` 等），只 grep
+   `access.log` 会几乎只看到 blackbox 探针——2026-09-23 那次就踩了这个坑，
+   样本量比 SQL 小一个量级（46 vs 391）。
+
+   ```sql
+   SELECT substring(user_agent from 'codex-tui/[0-9.]+[^"]*') AS ua, count(*)
+     FROM usage_logs
+    WHERE created_at > now() - interval '2 days'
+      AND user_agent LIKE 'codex-tui/0.15%'
+    GROUP BY 1 ORDER BY 2 DESC LIMIT 20;
+   ```
+
+2. **选观测量高的真实串**，并排除在真实种群中不存在的组合（2026-09-05 排除过
+   `TERM=dumb` 这类服务器/CI 特征；Windows 配 `Apple_Terminal` 之类自相矛盾的
+   串同样要排除，多半是中间商伪造的 UA）。
+3. **优先保持 OS/arch 与上一版一致**，只动版本号与终端构建号，减少账号侧的
+   身份跳变。
+4. **版本必须 ≥ 目标模型的 `minimal_client_version`**
+   （`internal/registry/models/codex_client_models.json`），这是硬门槛，
+   低了会被上游硬 400。
+5. **全仓 grep 旧 UA 再改**：身份不止 Go 常量一处，
+   `internal/registry/models/models.json` 的 per-model `override_header`
+   也会 pin 一份（见 `docs/ice-divergences.md` 分歧 #20），漏改会让同一账号
+   在不同模型间 UA 跳变。
+6. 改完更新：本文顶部固定身份 + 日期条、`AGENTS.md` 的 wire baseline 行、
+   `docs/codex-proxy-summary.md`，以及 pin 住常量的那几个测试。
+
 OAuth 请求默认强制使用这一组身份（跟随主线 cloaking 语义：即使管理员显式设置
 `codex-header-defaults.user-agent` 也会被规范身份覆盖）；只有开启
 `disable-codex-cloaking` 时才按配置处理。

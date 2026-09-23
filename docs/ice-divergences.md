@@ -1,7 +1,9 @@
 # ice-branch Divergences from Upstream
 
-The `ice` branch deliberately carries the local divergences listed below.
-When merging `origin/main` into `ice`, resolve conflicts per the AGENTS.md
+The ice line of work deliberately carries the local divergences listed below.
+The branch that actually ships is **`ice-pool-guard`** (it contains `ice` plus
+the pool-guard work; the `ice` ref itself lags and is not deployed).
+When merging `upstream/main` into `ice-pool-guard`, resolve conflicts per the AGENTS.md
 Upstream Merge Policy: prefer upstream semantics, but keep every divergence
 in this list. Anything divergent that is NOT listed here is merge residue —
 take upstream (precedent: the `cancelTransferred` pattern in
