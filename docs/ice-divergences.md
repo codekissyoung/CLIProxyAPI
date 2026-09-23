@@ -211,6 +211,23 @@ Key conflict sites are tagged in code with `// ice divergence: ...`.
     the `nativeGrokCLI` gate and merge upstream's new transforms inside it
     (the `webSearchAlias` restore merged this way on 2026-09-19).
 
+19. **IPv4-only uTLS dialing on the Codex paths** (2026-09-22 merge;
+    `sdk/proxyutil/proxy.go` `IPv4OnlyDialContext`/`IPv4OnlyDirect`/
+    `EnforceIPv4OnlyDefaultTransport`, `codex_websockets_connection.go`
+    `newProxyAwareWebsocketDialer`; pinned by
+    `request_proxy_priority_test.go`)
+    Codex HTTP and Responses-websocket traffic must present the captured
+    Codex CLI ClientHello over IPv4-only dialers (the VPS IPv6 exit is
+    Cloudflare-risky, see AGENTS.md "Context-aware uTLS dialing"), so the
+    websocket dialer always installs
+    `helps.NewCodexCLIWebsocketDialFunctions` and leaves
+    `websocket.Dialer.Proxy` nil, where upstream uses a stock `net.Dialer`
+    plus `http.ProxyFromEnvironment`. Upstream's execution-scoped proxy
+    override is kept: `executionProxyURL` (request proxy > credential proxy
+    > global proxy) feeds the uTLS dialers. Upstream's
+    `TestRequestProxyOverridesCredentialProxyForWebsocketAndAntigravity` is
+    adapted to assert the same priority through the uTLS dial functions.
+
 ## Translators (internal/translator)
 
 17. **Codex request sanitize + strip logging** (2026-07-23, commit 70a56375;
