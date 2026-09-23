@@ -63,7 +63,11 @@ Codex CLI 0.155.1 TUI 身份，而不是暴露各下游客户端的系统、版�
    身份跳变。
 4. **版本必须 ≥ 目标模型的 `minimal_client_version`**
    （`internal/registry/models/codex_client_models.json`），这是硬门槛，
-   低了会被上游硬 400。
+   低了会被上游硬 400。这条现在由
+   `internal/runtime/executor/codex_client_version_gate_test.go` 自动守住：
+   上游往 catalog 里加入门槛高于 `codexVersion` 的模型时测试直接红，并列出
+   是哪些模型。**红了不等于必须马上 bump**——如果这些模型本部署不供，可以在
+   该测试里显式抬高容忍并注明放行了哪几个。
 5. **全仓 grep 旧 UA 再改**：身份不止 Go 常量一处，
    `internal/registry/models/models.json` 的 per-model `override_header`
    也会 pin 一份（见 `docs/ice-divergences.md` 分歧 #20），漏改会让同一账号
