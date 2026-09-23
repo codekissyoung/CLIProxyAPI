@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -675,13 +676,32 @@ func applyCodexHeadersFromSources(r *http.Request, auth *cliproxyauth.Auth, toke
 		attrs = auth.Attributes
 	}
 	util.ApplyCustomHeadersFromAttrs(r, attrs, ginHeaders)
-	applyCodexCloakingHeaders(r.Header, cfg)
+	applyCodexCloakingHeaders(r.Header, cfg, auth)
+}
+
+// isCodexCloakingDisabled resolves the cloaking switch per credential, then
+// per key entry, then globally (upstream semantics).
+func isCodexCloakingDisabled(cfg *config.Config, auth *cliproxyauth.Auth) bool {
+	if auth != nil && len(auth.Attributes) > 0 {
+		if val, ok := auth.Attributes[cliproxyauth.AttributeCodexDisableCloaking]; ok {
+			if parsed, errParse := strconv.ParseBool(strings.TrimSpace(val)); errParse == nil {
+				return parsed
+			}
+		}
+	}
+	if entry := resolveCodexKeyConfig(cfg, auth); entry != nil && entry.DisableCodexCloaking != nil {
+		return *entry.DisableCodexCloaking
+	}
+	if cfg != nil && cfg.Codex.DisableCodexCloaking {
+		return true
+	}
+	return false
 }
 
 // applyCodexCloakingHeaders forces the canonical Codex CLI identity headers
-// (upstream behavior); disabled by codex.disable-codex-cloaking.
-func applyCodexCloakingHeaders(headers http.Header, cfg *config.Config) {
-	if headers == nil || cfg == nil || cfg.Codex.DisableCodexCloaking {
+// unless cloaking is disabled for this credential/key/instance.
+func applyCodexCloakingHeaders(headers http.Header, cfg *config.Config, auth *cliproxyauth.Auth) {
+	if headers == nil || cfg == nil || isCodexCloakingDisabled(cfg, auth) {
 		return
 	}
 	headers.Set("User-Agent", codexUserAgent)
