@@ -228,6 +228,21 @@ Key conflict sites are tagged in code with `// ice divergence: ...`.
     `TestRequestProxyOverridesCredentialProxyForWebsocketAndAntigravity` is
     adapted to assert the same priority through the uTLS dial functions.
 
+20. **Codex wire identity leads upstream** (2026-09-23;
+    `codex_executor_request.go` `codexUserAgent`/`codexVersion`,
+    `internal/registry/models/models.json` `gpt-5.6-luna.override_header`;
+    pinned by `codex_fallback_ua_pool_test.go`,
+    `internal/registry/model_definitions_test.go`)
+    ice presents `codex-tui/0.155.1 (Mac OS 26.5.2; arm64)
+    iTerm.app/3.7.1beta1 (codex-tui; 0.155.1)` while upstream's executor is
+    still on 0.154.0, because the codex client catalog gates
+    `gpt-6-sol`/`gpt-6-luna` behind `minimal_client_version` 0.155.0. The
+    per-model `override_header` UA in `models.json` is bumped with it so a
+    single account never switches UA between models (upstream regenerates
+    that file, so re-apply the bump on merges that touch it). See
+    `docs/multi-user-pro-account-hardening.md` for the dated history; drop
+    this divergence once upstream's own identity passes 0.155.1.
+
 ## Translators (internal/translator)
 
 17. **Codex request sanitize + strip logging** (2026-07-23, commit 70a56375;

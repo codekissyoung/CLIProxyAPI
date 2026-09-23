@@ -1,16 +1,16 @@
-# 多人共用 Pro 账号：Codex CLI 0.154.0 上游身份收敛
+# 多人共用 Pro 账号：Codex CLI 0.155.1 上游身份收敛
 
 ## 目标
 
 `ice` 分支把同一 OAuth 账号的上游请求收敛为上游捕获的
-Codex CLI 0.154.0 TUI 身份，而不是暴露各下游客户端的系统、版本和传输栈差异。
+Codex CLI 0.155.1 TUI 身份，而不是暴露各下游客户端的系统、版本和传输栈差异。
 这只改变上游可见身份，不改变账号选择、会话黏性、计费或响应翻译。
 
 当前固定应用身份为：
 
-- `User-Agent: codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.154.0)`
+- `User-Agent: codex-tui/0.155.1 (Mac OS 26.5.2; arm64) iTerm.app/3.7.1beta1 (codex-tui; 0.155.1)`
 - `Originator: codex-tui`
-- 缺失时补 `Version: 0.154.0`
+- 缺失时补 `Version: 0.155.1`
 - 缺失时补 `X-Codex-Beta-Features: remote_compaction_v2`
 
 > 2026-09-05：应用层身份从 0.147.0 升到 0.153.4。OpenAI 后端对
@@ -29,6 +29,14 @@ Codex CLI 0.154.0 TUI 身份，而不是暴露各下游客户端的系统、版�
 > 2026-09-16：应用层身份随上游合并升到 0.154.0，UA 同时换成上游捕获的
 > Mac OS/iTerm 字符串（放弃自组的 Ubuntu/vscode 字符串，与上游观测身份保持
 > 一致）；TLS ClientHello 基线不变。
+>
+> 2026-09-23：应用层身份升到 0.155.1。触发原因是上游合入的 codex 客户端
+> 模型目录把 `gpt-6-sol` / `gpt-6-luna` 的 `minimal_client_version` 定在
+> 0.155.0，0.154.0 会被应用层版本门槛挡住。UA 取本站三台 API 源站 nginx
+> 日志里观测量最高的真实 Mac OS arm64 0.155.1 字符串（46 次），OS/arch 与
+> 上一版完全一致，只换版本号与 iTerm 构建号；同期真实群体里 0.155.1 是
+> codex-tui 的主流版本。上游 executor 身份此时仍是 0.154.0，本次为 ice 侧
+> 先行。TLS ClientHello 基线不变（仍为 0.147.0 捕获）。
 
 OAuth 请求默认强制使用这一组身份（跟随主线 cloaking 语义：即使管理员显式设置
 `codex-header-defaults.user-agent` 也会被规范身份覆盖）；只有开启

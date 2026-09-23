@@ -2693,7 +2693,7 @@
       },
       "config": {
         "override_header": {
-          "user-agent": "codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.154.0)",
+          "user-agent": "codex-tui/0.155.1 (Mac OS 26.5.2; arm64) iTerm.app/3.7.1beta1 (codex-tui; 0.155.1)",
           "originator": "codex-tui"
         }
       },
@@ -2971,7 +2971,7 @@
       },
       "config": {
         "override_header": {
-          "user-agent": "codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.154.0)",
+          "user-agent": "codex-tui/0.155.1 (Mac OS 26.5.2; arm64) iTerm.app/3.7.1beta1 (codex-tui; 0.155.1)",
           "originator": "codex-tui"
         }
       },
@@ -3249,7 +3249,7 @@
       },
       "config": {
         "override_header": {
-          "user-agent": "codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.154.0)",
+          "user-agent": "codex-tui/0.155.1 (Mac OS 26.5.2; arm64) iTerm.app/3.7.1beta1 (codex-tui; 0.155.1)",
           "originator": "codex-tui"
         }
       },
@@ -3527,7 +3527,7 @@
       },
       "config": {
         "override_header": {
-          "user-agent": "codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.154.0)",
+          "user-agent": "codex-tui/0.155.1 (Mac OS 26.5.2; arm64) iTerm.app/3.7.1beta1 (codex-tui; 0.155.1)",
           "originator": "codex-tui"
         }
       },
