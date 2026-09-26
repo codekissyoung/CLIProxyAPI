@@ -9,14 +9,14 @@
 # Usage:
 #   CLIPROXY_API_KEY=<proxy-api-key> ./scripts/codex_responses_probe.sh [base-url] [model]
 #
-# Defaults: base-url http://127.0.0.1:8317, model gpt-5.
+# Defaults: base-url http://127.0.0.1:8317, model gpt-5.6-sol.
 # Exit codes: 0 = probe passed; 1 = usage/config error; 2 = HTTP failure;
 # 3 = stream ended without a terminal Responses event.
 
 set -euo pipefail
 
 BASE_URL="${1:-http://127.0.0.1:8317}"
-MODEL="${2:-gpt-5}"
+MODEL="${2:-gpt-5.6-sol}"
 API_KEY="${CLIPROXY_API_KEY:-}"
 
 if [[ -z "$API_KEY" ]]; then
