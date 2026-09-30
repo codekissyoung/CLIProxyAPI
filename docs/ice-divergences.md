@@ -58,6 +58,14 @@ Key conflict sites are tagged in code with `// ice divergence: ...`.
    `hasValidAccessToken` retention path (where the credential is never marked
    unavailable; `previousUnauthorized` from `LastError` is the transition
    marker). Pinned by `TestManager_RefreshAuthForRequest_RevocationCountedOnce`.
+   2026-09-30 merge: the separate, **unlisted** widening of
+   `isUnauthorizedError` to treat `invalid_grant`/`invalid_token` as 401 was
+   removed as merge residue per the policy above. Upstream now owns
+   `invalid_grant` in its own path (`isInvalidGrantError` + exponential backoff
+   for enabled credentials, unschedule for disabled ones); keeping the local
+   widening short-circuited it and zeroed `RefreshFailures`, failing upstream's
+   own `TestRefreshAuthForRequest_*InvalidGrant*` tests. The metrics counter
+   itself (this entry) is unchanged.
 
 6. **Codex turn-metadata session IDs** (`sdk/cliproxy/session/info.go`,
    `codexTurnMetadataBodySessionID`; moved out of `selector.go` in the
@@ -168,35 +176,24 @@ Key conflict sites are tagged in code with `// ice divergence: ...`.
     blocked/record helpers — local diagnostics requiring the
     `cliproxyauth`/`cliproxyexecutor` imports upstream removes.
 
-11. **Codex identity surface hardening** (2026-09-09;
-    `codex_executor_request.go`, `codex_websockets_request.go`,
-    `codex_websockets_connection.go`, `codex_executor_execute.go`,
-    `codex_executor_stream.go`, `codex_openai_images.go`;
-    pinned by `codex_identity_hardening_test.go`)
-    Extensions of upstream's identity-confuse plus unconditional strips:
-    - body-mirrored `client_metadata.x-codex-turn-metadata` gets its
-      `workspaces` subtree stripped unconditionally
-      (`stripCodexBodyTurnMetadataWorkspaces`); upstream only strips the
-      header copy;
-    - `client_metadata.ws_request_header_*` mirrors of identity/session
-      headers are deleted (`stripCodexBodyIdentityMetadataMirrors`);
-    - WS handshakes never forward `x-codex-turn-state` upstream (sticky
-      turn token minted under a possibly different pool account);
-    - turn-metadata `session_id`/`thread_id` and top-level
-      `session_id`/`conversation` are confused per account
-      (`confuseTrackedValue`);
-    - proxy-generated `prompt_cache_key`/`Session-Id` are account-scoped
-      (`accountScopedPromptCacheKey`) so a generated key can never appear
-      under two accounts;
-    - `codexIdentityConfuseEnabled` depends only on
-      `codex.identity-confuse`, not on the routing strategy (a routing
-      change can no longer silently disable confusion);
-    - `X-Client-Request-Id` stays per-request (client value passthrough,
-      fresh UUID when absent) instead of being collapsed onto the confused
-      session id;
-    - client-facing error bodies are parsed from the identity-restored copy
-      on the HTTP/SSE/compact/WS/images paths, so confused identifiers
-      never leak to the client.
+11. ~~**Codex identity surface hardening**~~ — **DROPPED 2026-09-30**
+    (upstream/main v8 merge). Upstream deleted its whole `identity-confuse`
+    mechanism (`git grep IdentityConfuse upstream/main` is empty), and the
+    operator chose to follow upstream rather than port it onto v8. Removed
+    with it: `applyCodexIdentityConfuseBody/Headers`,
+    `applyCodexIdentityConfuse/ExposeResponsePayload`, `confuseTrackedValue`,
+    `accountScopedPromptCacheKey`, `stripCodexBodyIdentityMetadataMirrors`,
+    `codexIdentityConfuseEnabled`, the `codex.identity-confuse` config field
+    and `codex_identity_hardening_test.go`.
+    **Behaviour change on the pool**: proxy-generated `prompt_cache_key` /
+    `Session-Id` / `Thread-Id` / `X-Codex-Window-Id`, turn-metadata
+    `session_id` / `thread_id` / `turn_id` and top-level
+    `session_id` / `conversation` are **no longer rewritten per account**, so a
+    generated identifier can now appear under two pool accounts after
+    failover. If a correlation/ban concern reappears, this entry is the
+    starting point — the removed code is on `ice-pool-guard-premerge-20260930`.
+    `stripCodexBodyTurnMetadataWorkspaces` (workspaces subtree strip) was
+    already upstream-side and is unaffected.
 
 16. **xAI native Grok CLI passthrough** (2026-07-24, commit 25c4825b;
     `xai_executor_request.go` `xaiIsNativeGrokCLIResponsesRequest`,

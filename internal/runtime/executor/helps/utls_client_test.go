@@ -23,8 +23,8 @@ import (
 
 	"github.com/gorilla/websocket"
 	tls "github.com/refraction-networking/utls"
-	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/proxyutil"
+	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/proxyutil"
 )
 
 type utlsClientRoundTripFunc func(*http.Request) (*http.Response, error)

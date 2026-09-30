@@ -15,12 +15,12 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/clienterror"
-	internalconfig "github.com/router-for-me/CLIProxyAPI/v7/internal/config"
-	internallogging "github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/thinking"
-	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/clienterror"
+	internalconfig "github.com/router-for-me/CLIProxyAPI/v8/internal/config"
+	internallogging "github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/thinking"
+	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 )
@@ -1714,14 +1714,15 @@ func isUnauthorizedError(err error) bool {
 		return true
 	}
 	raw := strings.ToLower(err.Error())
-	if strings.Contains(raw, "status 401") || strings.Contains(raw, "401 unauthorized") {
-		return true
-	}
-	// OAuth token endpoints answer a revoked or expired refresh token with
-	// HTTP 400 invalid_grant (RFC 6749 §5.2), not 401 — xAI does exactly this.
-	// Without this branch the credential is never marked unavailable and keeps
-	// getting picked until every request fails.
-	return strings.Contains(raw, "invalid_grant") || strings.Contains(raw, "invalid_token")
+	// 2026-09-30 merge: the local invalid_grant/invalid_token branch is gone.
+	// It existed because OAuth token endpoints answer a revoked refresh token
+	// with HTTP 400 invalid_grant (RFC 6749 §5.2) instead of 401 — xAI does
+	// exactly this — and without it the credential was never marked
+	// unavailable. Upstream now owns that case with a dedicated invalid_grant
+	// path (exponential backoff for enabled credentials, unschedule for
+	// disabled ones); keeping the local widening here short-circuited it and
+	// zeroed RefreshFailures, breaking upstream's own backoff tests.
+	return strings.Contains(raw, "status 401") || strings.Contains(raw, "401 unauthorized")
 }
 
 func hasUnauthorizedAuthFailure(auth *Auth) bool {
@@ -1739,6 +1740,25 @@ func hasUnauthorizedAuthFailure(auth *Auth) bool {
 // with no pending refresh scheduled.
 func HasUnauthorizedAuthFailure(auth *Auth) bool {
 	return hasUnauthorizedAuthFailure(auth)
+}
+
+func hasDisabledInvalidGrantFailure(auth *Auth) bool {
+	if auth == nil {
+		return false
+	}
+	isDisabled := auth.Disabled || auth.Status == StatusDisabled
+	if !isDisabled {
+		return false
+	}
+	if auth.LastError != nil && (isInvalidGrantResultError(auth.LastError) || isInvalidGrantErrorMessage(auth.LastError.Message) || isInvalidGrantErrorMessage(auth.LastError.Code)) {
+		return true
+	}
+	return false
+}
+
+// HasDisabledInvalidGrantFailure reports whether the auth is disabled and has encountered an invalid_grant error.
+func HasDisabledInvalidGrantFailure(auth *Auth) bool {
+	return hasDisabledInvalidGrantFailure(auth)
 }
 
 func refreshErrorFromError(err error) *Error {
@@ -1841,22 +1861,28 @@ func isInvalidGrantError(err error) bool {
 	if err == nil {
 		return false
 	}
-	status := statusCodeFromError(err)
-	if status != http.StatusBadRequest && status != http.StatusUnauthorized {
+	if !isInvalidGrantErrorMessage(err.Error()) {
 		return false
 	}
-	return isInvalidGrantErrorMessage(err.Error())
+	status := statusCodeFromError(err)
+	if status == http.StatusBadRequest || status == http.StatusUnauthorized || status == 0 {
+		return true
+	}
+	return false
 }
 
 func isInvalidGrantResultError(err *Error) bool {
 	if err == nil {
 		return false
 	}
-	status := statusCodeFromResult(err)
-	if status != http.StatusBadRequest && status != http.StatusUnauthorized {
+	if !isInvalidGrantErrorMessage(err.Code) && !isInvalidGrantErrorMessage(err.Message) {
 		return false
 	}
-	return isInvalidGrantErrorMessage(err.Code) || isInvalidGrantErrorMessage(err.Message)
+	status := statusCodeFromResult(err)
+	if status == http.StatusBadRequest || status == http.StatusUnauthorized || status == 0 {
+		return true
+	}
+	return false
 }
 
 func isModelSupportResultError(err *Error) bool {

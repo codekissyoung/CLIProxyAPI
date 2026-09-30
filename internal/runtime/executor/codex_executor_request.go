@@ -12,16 +12,16 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/misc"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/thinking"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/util"
-	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
-	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/proxyutil"
-	sdktranslator "github.com/router-for-me/CLIProxyAPI/v7/sdk/translator"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/misc"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/thinking"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
+	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
+	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
+	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/proxyutil"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -170,20 +170,27 @@ func tuneCodexTransport(transport *http.Transport) {
 }
 
 func translateCodexRequestPair(from, to sdktranslator.Format, model string, originalPayload, payload []byte, stream bool, preserveEmptyThinkingBlocks ...bool) ([]byte, []byte) {
+	original, body, _ := translateCodexRequestPairWithUpdateIntent(from, to, model, originalPayload, payload, stream, preserveEmptyThinkingBlocks...)
+	return original, body
+}
+
+func translateCodexRequestPairWithUpdateIntent(from, to sdktranslator.Format, model string, originalPayload, payload []byte, stream bool, preserveEmptyThinkingBlocks ...bool) ([]byte, []byte, bool) {
 	isCompat := len(preserveEmptyThinkingBlocks) > 0 && preserveEmptyThinkingBlocks[0]
-	translate := func(raw []byte) []byte {
+	ctx := context.Background()
+	translate := func(raw []byte) ([]byte, bool) {
 		if isCompat && from == sdktranslator.FormatClaude && to == sdktranslator.FormatCodex {
-			return helps.TranslateRequestWithAPIKeyModelCompatibility(context.Background(), nil, nil, from, to, model, raw, stream, true)
+			return helps.TranslateRequestWithAPIKeyModelCompatibility(ctx, nil, nil, from, to, model, raw, stream, true), false
 		}
-		return sdktranslator.TranslateRequest(from, to, model, raw, stream)
+		translated := sdktranslator.TranslateRequestEnvelope(ctx, from, to, sdktranslator.RequestEnvelope{Format: from, Model: model, Stream: stream, Body: raw})
+		return translated.Body, translated.ConfigurationUpdatesChanged
 	}
 	if bytes.Equal(originalPayload, payload) {
-		body := translate(payload)
-		return body, body
+		body, changed := translate(payload)
+		return body, body, changed
 	}
-	originalTranslated := translate(originalPayload)
-	body := translate(payload)
-	return originalTranslated, body
+	originalTranslated, _ := translate(originalPayload)
+	body, changed := translate(payload)
+	return originalTranslated, body, changed
 }
 
 // PrepareRequest injects Codex credentials into the outgoing HTTP request.
@@ -221,25 +228,11 @@ func (e *CodexExecutor) HttpRequest(ctx context.Context, auth *cliproxyauth.Auth
 	return httpClient.Do(httpReq)
 }
 
-type codexIdentityConfuseState struct {
-	enabled                bool
-	authID                 string
-	originalPromptCacheKey string
-	promptCacheKey         string
-	turnIDs                []codexIdentityReplacement
-}
-
-type codexIdentityReplacement struct {
-	original string
-	confused string
-}
-
-func (e *CodexExecutor) cacheHelper(ctx context.Context, from sdktranslator.Format, url string, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, userPayload []byte, rawJSON []byte, headerSets ...http.Header) (*http.Request, []byte, codexIdentityConfuseState, error) {
+func (e *CodexExecutor) cacheHelper(ctx context.Context, from sdktranslator.Format, url string, req cliproxyexecutor.Request, rawJSON []byte, headerSets ...http.Header) (*http.Request, []byte, error) {
 	var headers http.Header
 	if len(headerSets) > 0 {
 		headers = headerSets[0]
 	}
-	clientProvidedCacheKey := strings.TrimSpace(gjson.GetBytes(userPayload, "prompt_cache_key").String()) != ""
 	var cache helps.CodexCache
 	if sourceFormatEqual(from, sdktranslator.FormatClaude) {
 		modelName := strings.TrimSpace(gjson.GetBytes(rawJSON, "model").String())
@@ -248,7 +241,7 @@ func (e *CodexExecutor) cacheHelper(ctx context.Context, from sdktranslator.Form
 		}
 		cached, ok, errCache := helps.ClaudeCodePromptCache(ctx, modelName, req.Payload, headers)
 		if errCache != nil {
-			return nil, nil, codexIdentityConfuseState{}, errCache
+			return nil, nil, errCache
 		}
 		if ok {
 			cache = cached
@@ -274,222 +267,19 @@ func (e *CodexExecutor) cacheHelper(ctx context.Context, from sdktranslator.Form
 	if cache.ID == "" {
 		cache.ID = helps.ProviderSessionUUID("codex", req.Metadata)
 	}
-	cache.ID = accountScopedPromptCacheKey(cache.ID, clientProvidedCacheKey, auth)
 
 	if cache.ID != "" {
 		rawJSON = helps.SetStringIfDifferent(rawJSON, "prompt_cache_key", cache.ID)
 	}
 	rawJSON = helps.SanitizeCodexInputItemIDs(rawJSON)
-	rawJSON = stripCodexBodyTurnMetadataWorkspaces(rawJSON)
-	rawJSON = stripCodexBodyIdentityMetadataMirrors(rawJSON)
-	var identityState codexIdentityConfuseState
-	rawJSON, identityState = applyCodexIdentityConfuseBody(e.cfg, auth, userPayload, rawJSON)
-	if identityState.promptCacheKey != "" {
-		cache.ID = identityState.promptCacheKey
-	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(rawJSON))
 	if err != nil {
-		return nil, nil, codexIdentityConfuseState{}, err
+		return nil, nil, err
 	}
 	if cache.ID != "" {
 		httpReq.Header.Set("Session-Id", cache.ID)
 	}
-	return httpReq, rawJSON, identityState, nil
-}
-
-// accountScopedPromptCacheKey seeds proxy-generated prompt cache keys with the
-// serving account. Client-supplied keys pass through untouched here; the
-// identity-confuse stage remaps those per account separately.
-// ice divergence: an account-independent derived key replayed under a second
-// account after failover is a deterministic pool fingerprint.
-func accountScopedPromptCacheKey(cacheID string, clientProvided bool, auth *cliproxyauth.Auth) string {
-	cacheID = strings.TrimSpace(cacheID)
-	if cacheID == "" || clientProvided || auth == nil || strings.TrimSpace(auth.ID) == "" {
-		return cacheID
-	}
-	return codexIdentityConfuseUUID(auth.ID, "prompt-cache", cacheID)
-}
-
-// stripCodexBodyIdentityMetadataMirrors drops client_metadata keys that mirror
-// identity/session WS headers (ws_request_header_session_id and friends). The
-// corresponding real headers are already handled by the header path (confused
-// or stripped); leaving body mirrors in place would bypass that handling.
-// Unlike identity confusion this strip is unconditional.
-func stripCodexBodyIdentityMetadataMirrors(rawJSON []byte) []byte {
-	metadata := gjson.GetBytes(rawJSON, "client_metadata")
-	if !metadata.IsObject() {
-		return rawJSON
-	}
-	metadata.ForEach(func(key, _ gjson.Result) bool {
-		name := strings.ToLower(key.String())
-		if !strings.HasPrefix(name, "ws_request_header_") {
-			return true
-		}
-		headerName := strings.ReplaceAll(strings.TrimPrefix(name, "ws_request_header_"), "_", "-")
-		switch headerName {
-		case "session-id", "conversation-id", "x-client-request-id", "thread-id", "x-codex-window-id", "x-codex-turn-state", "x-codex-turn-metadata":
-			if cleaned, errDelete := sjson.DeleteBytes(rawJSON, "client_metadata."+key.String()); errDelete == nil {
-				rawJSON = cleaned
-			}
-		}
-		return true
-	})
-	return rawJSON
-}
-
-func applyCodexIdentityConfuseBody(cfg *config.Config, auth *cliproxyauth.Auth, userPayload []byte, rawJSON []byte) ([]byte, codexIdentityConfuseState) {
-	if !codexIdentityConfuseEnabled(cfg) || auth == nil || strings.TrimSpace(auth.ID) == "" || len(rawJSON) == 0 {
-		return rawJSON, codexIdentityConfuseState{}
-	}
-
-	state := codexIdentityConfuseState{enabled: true, authID: strings.TrimSpace(auth.ID)}
-	if promptCacheKey := strings.TrimSpace(gjson.GetBytes(userPayload, "prompt_cache_key").String()); promptCacheKey != "" {
-		state.originalPromptCacheKey = promptCacheKey
-		state.promptCacheKey = codexIdentityConfuseUUID(auth.ID, "prompt-cache", promptCacheKey)
-		rawJSON = helps.SetStringIfDifferent(rawJSON, "prompt_cache_key", state.promptCacheKey)
-	}
-	if installationID := strings.TrimSpace(gjson.GetBytes(userPayload, "client_metadata.x-codex-installation-id").String()); installationID != "" {
-		rawJSON, _ = sjson.SetBytes(rawJSON, "client_metadata.x-codex-installation-id", codexIdentityConfuseUUID(auth.ID, "installation", installationID))
-	}
-	if turnMetadata := strings.TrimSpace(gjson.GetBytes(rawJSON, "client_metadata.x-codex-turn-metadata").String()); turnMetadata != "" {
-		rawJSON, _ = sjson.SetBytes(rawJSON, "client_metadata.x-codex-turn-metadata", applyCodexTurnMetadataIdentityConfuse(turnMetadata, &state))
-	}
-	if state.promptCacheKey != "" {
-		if windowID := strings.TrimSpace(gjson.GetBytes(rawJSON, "client_metadata.x-codex-window-id").String()); windowID != "" {
-			rawJSON, _ = sjson.SetBytes(rawJSON, "client_metadata.x-codex-window-id", state.promptCacheKey+":0")
-		}
-	}
-	// ice divergence: rewrite any other stable client session identifiers
-	// per account so cross-account failover never replays the same value.
-	if sessionID := strings.TrimSpace(gjson.GetBytes(rawJSON, "session_id").String()); sessionID != "" {
-		rawJSON, _ = sjson.SetBytes(rawJSON, "session_id", state.confuseTrackedValue("session", sessionID))
-	}
-	if conversation := gjson.GetBytes(rawJSON, "conversation"); conversation.Type == gjson.String {
-		if conversationID := strings.TrimSpace(conversation.String()); conversationID != "" {
-			rawJSON, _ = sjson.SetBytes(rawJSON, "conversation", state.confuseTrackedValue("conversation", conversationID))
-		}
-	} else if conversation.IsObject() {
-		if conversationID := strings.TrimSpace(conversation.Get("id").String()); conversationID != "" {
-			rawJSON, _ = sjson.SetBytes(rawJSON, "conversation.id", state.confuseTrackedValue("conversation", conversationID))
-		}
-	}
-
-	return rawJSON, state
-}
-
-func applyCodexIdentityConfuseHeaders(headers http.Header, state *codexIdentityConfuseState) {
-	if headers == nil {
-		return
-	}
-	if state == nil || !state.enabled {
-		return
-	}
-
-	if rawTurnMetadata := strings.TrimSpace(headers.Get("X-Codex-Turn-Metadata")); rawTurnMetadata != "" {
-		headers.Set("X-Codex-Turn-Metadata", applyCodexTurnMetadataIdentityConfuse(rawTurnMetadata, state))
-	}
-	if state.promptCacheKey == "" {
-		return
-	}
-
-	setCodexSessionHeaderCasePreserved(headers, "Session-Id", state.promptCacheKey)
-	if headerValueCaseInsensitive(headers, "Conversation_id") != "" {
-		setHeaderCasePreserved(headers, "Conversation_id", state.promptCacheKey)
-	}
-	// X-Client-Request-Id is per-request in the real client; it is never
-	// rewritten here (a session-scoped constant would be an impossible
-	// signature). Thread-Id and Window-Id are session-scoped and follow the
-	// confused session identity.
-	headers.Set("Thread-Id", state.promptCacheKey)
-	headers.Set("X-Codex-Window-Id", state.promptCacheKey+":0")
-}
-
-func applyCodexTurnMetadataIdentityConfuse(rawTurnMetadata string, state *codexIdentityConfuseState) string {
-	updatedTurnMetadata := rawTurnMetadata
-	if state == nil || !state.enabled {
-		return updatedTurnMetadata
-	}
-	if state.promptCacheKey != "" && gjson.Get(rawTurnMetadata, "prompt_cache_key").Exists() {
-		updatedTurnMetadata, _ = sjson.Set(updatedTurnMetadata, "prompt_cache_key", state.promptCacheKey)
-	} else if state.promptCacheKey != "" && state.originalPromptCacheKey != "" {
-		updatedTurnMetadata = strings.ReplaceAll(updatedTurnMetadata, state.originalPromptCacheKey, state.promptCacheKey)
-	}
-	if turnID := strings.TrimSpace(gjson.Get(rawTurnMetadata, "turn_id").String()); turnID != "" {
-		updatedTurnMetadata, _ = sjson.Set(updatedTurnMetadata, "turn_id", state.confuseTurnID(turnID))
-	}
-	// ice divergence: session_id/thread_id inside turn metadata are stable
-	// client session identifiers; rewrite them per account like turn_id so a
-	// temporary failover never exposes the same value under a second account.
-	if sessionID := strings.TrimSpace(gjson.Get(rawTurnMetadata, "session_id").String()); sessionID != "" {
-		updatedTurnMetadata, _ = sjson.Set(updatedTurnMetadata, "session_id", state.confuseTrackedValue("session", sessionID))
-	}
-	if threadID := strings.TrimSpace(gjson.Get(rawTurnMetadata, "thread_id").String()); threadID != "" {
-		updatedTurnMetadata, _ = sjson.Set(updatedTurnMetadata, "thread_id", state.confuseTrackedValue("thread", threadID))
-	}
-	if state.promptCacheKey != "" && gjson.Get(rawTurnMetadata, "window_id").Exists() {
-		updatedTurnMetadata, _ = sjson.Set(updatedTurnMetadata, "window_id", state.promptCacheKey+":0")
-	}
-	return updatedTurnMetadata
-}
-
-func applyCodexIdentityConfuseResponsePayload(payload []byte, state codexIdentityConfuseState) []byte {
-	payload = replaceCodexIdentityResponsePayload(payload, state.originalPromptCacheKey, state.promptCacheKey)
-	for _, turnID := range state.turnIDs {
-		payload = replaceCodexIdentityResponsePayload(payload, turnID.original, turnID.confused)
-	}
-	return payload
-}
-
-func applyCodexIdentityExposeResponsePayload(payload []byte, state codexIdentityConfuseState) []byte {
-	payload = replaceCodexIdentityResponsePayload(payload, state.promptCacheKey, state.originalPromptCacheKey)
-	for _, turnID := range state.turnIDs {
-		payload = replaceCodexIdentityResponsePayload(payload, turnID.confused, turnID.original)
-	}
-	return payload
-}
-
-func (state *codexIdentityConfuseState) confuseTurnID(turnID string) string {
-	return state.confuseTrackedValue("turn", turnID)
-}
-
-// confuseTrackedValue rewrites any stable identifier deterministically per
-// account and records the pair so downstream responses can be restored.
-func (state *codexIdentityConfuseState) confuseTrackedValue(kind string, value string) string {
-	value = strings.TrimSpace(value)
-	if state == nil || !state.enabled || strings.TrimSpace(state.authID) == "" || value == "" {
-		return value
-	}
-	for _, replacement := range state.turnIDs {
-		if replacement.original == value || replacement.confused == value {
-			return replacement.confused
-		}
-	}
-	confusedValue := codexIdentityConfuseUUID(state.authID, kind, value)
-	state.turnIDs = append(state.turnIDs, codexIdentityReplacement{original: value, confused: confusedValue})
-	return confusedValue
-}
-
-func replaceCodexIdentityResponsePayload(payload []byte, from string, to string) []byte {
-	from = strings.TrimSpace(from)
-	to = strings.TrimSpace(to)
-	if len(payload) == 0 || from == "" || to == "" || from == to || !bytes.Contains(payload, []byte(from)) {
-		return payload
-	}
-	return bytes.ReplaceAll(payload, []byte(from), []byte(to))
-}
-
-func codexIdentityConfuseEnabled(cfg *config.Config) bool {
-	// ice divergence: identity confusion depends only on its own switch. It
-	// used to also require session-affinity/fill-first routing, which meant a
-	// routing change silently disabled every application-layer anti-correlation
-	// rewrite with no warning. Per-account rewriting is well-defined under any
-	// routing strategy.
-	return cfg != nil && cfg.Codex.IdentityConfuse
-}
-
-func codexIdentityConfuseUUID(authID string, kind string, value string) string {
-	name := strings.Join([]string{"cli-proxy-api", "codex", "identity-confuse", kind, strings.TrimSpace(authID), strings.TrimSpace(value)}, ":")
-	return uuid.NewSHA1(uuid.NameSpaceOID, []byte(name)).String()
+	return httpReq, rawJSON, nil
 }
 
 // stripCodexTurnMetadataWorkspaces removes local workspace paths and git
@@ -734,6 +524,9 @@ func codexOperatorHeaderValue(ctx context.Context, auth *cliproxyauth.Auth, clie
 // isCodexCloakingDisabled resolves the cloaking switch per credential, then
 // per key entry, then globally (upstream semantics).
 func isCodexCloakingDisabled(cfg *config.Config, auth *cliproxyauth.Auth) bool {
+	if auth != nil && auth.AuthKind() == cliproxyauth.AuthKindAPIKey {
+		cfg = cfg.ForAPIKey()
+	}
 	if auth != nil && len(auth.Attributes) > 0 {
 		if val, ok := auth.Attributes[cliproxyauth.AttributeCodexDisableCloaking]; ok {
 			if parsed, errParse := strconv.ParseBool(strings.TrimSpace(val)); errParse == nil {

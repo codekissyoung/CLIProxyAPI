@@ -65,6 +65,7 @@ go build -o test-output ./cmd/server && rm test-output # Verify compile (REQUIRE
 - For SSE scanners on streaming bodies, follow the project convention `scanner.Buffer(nil, 52_428_800)`; let bufio's lazy 4KB → 2× growth handle buffer sizing. Don't pre-allocate large initial buffers — every other executor (qwen / openai_compat / claude / iflow / gemini) follows this form.
 - Avoid wall-clock `time.Sleep` in TTL, expiration, ordering, or cache-eviction unit tests due to platform timer granularity (e.g. Windows default timer resolution of ~15.6ms) and CI jitter under load; prefer controllable clocks (`nowFunc` / mock clock), explicit timestamp manipulation, or deterministic synchronization primitives.
 - Note: if modifying features that involve CLIProxyAPIHome, check if corresponding updates are needed in the CLIProxyAPIHome repository.
+- Endpoints under the `/v0/management` base URL are deprecated and no longer maintained. For any feature changes, do not modify endpoints under `/v0/management` unless necessary to fix compilation errors.
 
 ## Upstream Merge Policy
 - **`ice-pool-guard` is the branch that ships.** It carries `ice` plus the pool-guard work; `ice` is a lagging base kept only for history and is NOT deployed (`scripts/cliproxy-update.sh` builds the `ice-pool-guard` checkout). Merge upstream into `ice-pool-guard`; "the ice branch" in this file and in `docs/ice-divergences.md` means that line of work, not the `ice` ref.

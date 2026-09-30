@@ -1,10 +1,10 @@
 # Binaries
-CLIProxyAPI
 cli-proxy-api
+CLIProxyAPI
 *.exe
 
 # Configuration
-# config.yaml
+config.yaml
 .env
 
 # Generated content
@@ -21,19 +21,16 @@ pgstore/*
 gitstore/*
 objectstore/*
 
-auths/logs/
-
 # Static assets
 static/*
 
 # Authentication data
+auths/*
+/auths
 !auths/.gitkeep
 
-# Codex token import files (contain sensitive refresh_tokens)
-codex*.txt
-
 # Documentation
-# docs/*
+# docs/*  —— ice: fork 维护 docs/（ice-divergences.md 等），不 ignore
 AGENTS.md
 CLAUDE.md
 GEMINI.md

@@ -7,14 +7,14 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/misc"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/thinking"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/util"
-	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
-	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
-	sdktranslator "github.com/router-for-me/CLIProxyAPI/v7/sdk/translator"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/misc"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/thinking"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
+	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
+	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
+	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
 	"github.com/tidwall/gjson"
 )
 
@@ -38,7 +38,6 @@ func applyCodexPromptCacheHeadersWithAuth(ctx context.Context, auth *cliproxyaut
 		requestHeaders = headerSets[0]
 	}
 	var cache helps.CodexCache
-	clientProvidedCacheKey := false
 	if sourceFormatEqual(from, sdktranslator.FormatClaude) {
 		modelName := strings.TrimSpace(gjson.GetBytes(rawJSON, "model").String())
 		if modelName == "" {
@@ -54,13 +53,11 @@ func applyCodexPromptCacheHeadersWithAuth(ctx context.Context, auth *cliproxyaut
 	} else if sourceFormatEqual(from, sdktranslator.FormatOpenAIResponse) {
 		if promptCacheKey := gjson.GetBytes(req.Payload, "prompt_cache_key"); promptCacheKey.Exists() {
 			cache.ID = promptCacheKey.String()
-			clientProvidedCacheKey = strings.TrimSpace(cache.ID) != ""
 		}
 	}
 	if cache.ID == "" {
 		cache.ID = helps.ProviderSessionUUID("codex", req.Metadata)
 	}
-	cache.ID = accountScopedPromptCacheKey(cache.ID, clientProvidedCacheKey, auth)
 
 	if cache.ID != "" {
 		rawJSON = helps.SetStringIfDifferent(rawJSON, "prompt_cache_key", cache.ID)
