@@ -72,6 +72,29 @@ go build -o test-output ./cmd/server && rm test-output # Verify compile (REQUIRE
 - When merging upstream `main` into `ice-pool-guard`, prefer upstream semantics over locally divergent patches; keep a local divergence only with documented production evidence (the Home/temp session-affinity model is such a deliberate divergence).
 - The full inventory of deliberate divergences lives in `docs/ice-divergences.md`; key sites carry `// ice divergence: ...` markers. Divergences NOT in that inventory are merge residue — take upstream. Keep the inventory and markers updated when a divergence is added or dropped.
 - Precedent: the v7.2.128 merge dropped the local Gemini 500 `"status":"UNKNOWN"` request-fault guard to follow upstream's `clienterror.IsRequestFault` classification.
+- **Resolve conflicts hunk by hunk, never `git checkout --theirs <file>`.** That command takes the
+  ENTIRE upstream blob, discarding every local change in the file — not just the conflicted region.
+  The 2026-09-30 v8 merge did that to 22 files and silently wiped unrelated divergences (e.g. the
+  Home/temp session-affinity work in `selector.go`, whose only conflict was the import block); it had
+  to be redone. For an import-only conflict, take upstream's block and re-add the imports that exist
+  only on our side under the new module path. "Prefer upstream" means *prefer upstream semantics at
+  the conflict*, not "drop the inventory".
+- **When upstream deletes a feature we depend on, the breakage surfaces in files that merged cleanly.**
+  In the v8 merge upstream removed all of `identity-confuse`: the config field vanished from
+  `internal/config/config_types.go` as a *clean* merge while the call sites (in conflicted files)
+  survived — invisible in the conflict list, instant compile break. After every merge: `go build`,
+  then `grep -rn` the symbol names of each local feature and confirm definition and call sites either
+  both live or both went.
+- **Merge damage can masquerade as "already handled".** The same merge silently dropped the actual
+  `deleteCodexRequestFields(rawJSON, "reasoning_effort")` call while leaving `reasoning_effort` in the
+  "dropped fields" log list, so reading the code suggested it was still stripped (it is a Chat-API
+  field; forwarding it to `/v1/responses` makes the upstream 400). **Upstream's own new tests are the
+  detector** — always run the FULL suite, and treat a failing upstream test as "my merge broke
+  upstream semantics" before suspecting the test.
+- **Count the markers.** `grep -rc '// ice divergence' --include=*.go` before and after the merge; the
+  delta must be explainable item by item (the v8 merge went 36 → 32, all four being identity-confuse).
+  Dropping a listed divergence means marking it DROPPED in `docs/ice-divergences.md` **with the
+  behaviour change and the premerge branch to recover it from**, not deleting the entry.
 
 ## Deployment Notes
 - On production hosts, the live CLIProxyAPI service is `cliproxyapi` and runs with `-config /home/iec/deploy/etc/cliproxyapi.yaml`.
