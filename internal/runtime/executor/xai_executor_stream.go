@@ -43,12 +43,11 @@ func (e *XAIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth
 		return nil, err
 	}
 	applyXAIChatHeaders(httpReq, auth, token, true, prepared.sessionID, opts.Headers)
-	applyXAIGrokCLIClientVersion(httpReq, baseURL, prepared.grokCLIClientVersion)
 	e.recordXAIRequest(ctx, auth, url, httpReq.Header.Clone(), prepared.body)
 
 	httpClient := helps.NewProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
 	httpClient = reporter.TrackHTTPClient(httpClient)
-	httpResp, releaseRequest, err := xaiDoWithHeaderDeadline(ctx, httpClient, httpReq)
+	httpResp, err := httpClient.Do(httpReq)
 	if err != nil {
 		helps.RecordAPIResponseError(ctx, e.cfg, err)
 		return nil, err
@@ -59,7 +58,6 @@ func (e *XAIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth
 		if errClose := httpResp.Body.Close(); errClose != nil {
 			log.Errorf("xai executor: close response body error: %v", errClose)
 		}
-		releaseRequest()
 		if errRead != nil {
 			helps.RecordAPIResponseError(ctx, e.cfg, errRead)
 			return nil, errRead
@@ -72,9 +70,6 @@ func (e *XAIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth
 	out := make(chan cliproxyexecutor.StreamChunk)
 	go func() {
 		defer close(out)
-		// Runs after the body is closed (defers unwind last in, first out), so
-		// the watchdog context stays alive for the whole stream.
-		defer releaseRequest()
 		defer func() {
 			if errClose := httpResp.Body.Close(); errClose != nil {
 				log.Errorf("xai executor: close response body error: %v", errClose)
@@ -83,6 +78,8 @@ func (e *XAIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth
 		scanner := bufio.NewScanner(httpResp.Body)
 		scanner.Buffer(nil, 52_428_800)
 		claudeInputTokens := helps.NewClaudeInputTokenState(prepared.from, prepared.to, prepared.responseFormat, prepared.originalPayload)
+		var streamUsage helps.StreamUsageBuffer
+		defer streamUsage.Publish(ctx, reporter)
 		var param any
 		outputItemsByIndex := make(map[int64][]byte)
 		var outputItemsFallback [][]byte
@@ -90,13 +87,53 @@ func (e *XAIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth
 		namespaceRestorer := newXAINamespaceRestorer(prepared.namespaceTools)
 		var pendingEventLine []byte
 		emitTranslatedLine := func(translatedLine []byte) bool {
-			chunks := helps.TranslateStreamWithClaudeInputTokens(ctx, prepared.to, prepared.responseFormat, req.Model, prepared.originalPayload, prepared.body, translatedLine, &param, claudeInputTokens)
+			lines, errBridge := prepared.applyPatch.Stream(translatedLine)
+			if errBridge != nil {
+				reporter.PublishFailure(ctx, statusErr{code: http.StatusBadGateway, msg: helps.ApplyPatchUpstreamErrorMessage})
+			}
+			var chunks [][]byte
+			for _, line := range lines {
+				if bytes.HasPrefix(line, xaiDataTag) {
+					eventData := bytes.TrimSpace(line[len(xaiDataTag):])
+					switch gjson.GetBytes(eventData, "type").String() {
+					case "response.output_item.done":
+						xaiCollectOutputItemDone(eventData, outputItemsByIndex, &outputItemsFallback)
+					case "response.completed", "response.incomplete":
+						// Reconstruct only after the bridge has restored dispatcher children.
+						eventData = xaiPatchCompletedOutput(eventData, outputItemsByIndex, outputItemsFallback)
+						// ice divergence（#16）：原生 Grok CLI 不做 reasoning-summary 归一。
+						if !prepared.nativeGrokCLI {
+							eventData = xaiNormalizeReasoningSummaryData(eventData)
+						}
+						if gjson.GetBytes(eventData, "type").String() == "response.completed" {
+							// Only completed responses carry replayable terminal state.
+							cacheXAIReasoningReplayFromCompleted(ctx, prepared.replayScope, eventData)
+						}
+						ending := line[len(bytes.TrimRight(line, "\r\n")):]
+						line = append(append([]byte("data: "), eventData...), ending...)
+					}
+				}
+				chunks = append(chunks, helps.TranslateStreamWithClaudeInputTokens(ctx, prepared.to, prepared.responseFormat, req.Model, prepared.originalPayload, prepared.body, line, &param, claudeInputTokens)...)
+			}
+			helps.RecordApplyPatchStreamFailure(ctx, param, reporter, statusErr{code: http.StatusBadGateway, msg: helps.ApplyPatchUpstreamErrorMessage})
 			for i := range chunks {
 				select {
 				case out <- cliproxyexecutor.StreamChunk{Payload: chunks[i]}:
 				case <-ctx.Done():
 					return false
 				}
+			}
+			if helps.StopApplyPatchStream(ctx, param, reporter, out, statusErr{code: http.StatusBadGateway, msg: helps.ApplyPatchUpstreamErrorMessage}) {
+				return false
+			}
+			if errBridge != nil {
+				errBridge = statusErr{code: http.StatusBadGateway, msg: helps.ApplyPatchUpstreamErrorMessage}
+				reporter.PublishFailure(ctx, errBridge)
+				select {
+				case out <- cliproxyexecutor.StreamChunk{Err: errBridge}:
+				case <-ctx.Done():
+				}
+				return false
 			}
 			return true
 		}
@@ -105,7 +142,7 @@ func (e *XAIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth
 			helps.AppendAPIResponseChunk(ctx, e.cfg, line)
 
 			if bytes.HasPrefix(line, xaiEventTag) {
-				if pendingEventLine != nil && !emitTranslatedLine(xaiResponseEventLine(prepared, pendingEventLine, "")) {
+				if pendingEventLine != nil && !emitTranslatedLine(xaiNormalizeReasoningSummaryEventLine(pendingEventLine, "")) {
 					return
 				}
 				pendingEventLine = bytes.Clone(line)
@@ -113,10 +150,16 @@ func (e *XAIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth
 			}
 
 			if bytes.HasPrefix(line, xaiDataTag) {
+				// ice divergence（#16 原生 Grok CLI 透传）：xaiResponseDataEvents 把
+				// nativeGrokCLI 判断封装在内——原生 CLI 原样返回、不做 reasoning-summary
+				// 归一。上游直接调 xaiNormalizeReasoningSummaryDataEvents。
 				eventDataList := xaiResponseDataEvents(prepared, bytes.TrimSpace(line[len(xaiDataTag):]))
 				hasPendingEventLine := pendingEventLine != nil
 				for i, eventData := range eventDataList {
+					// 同一条分叉：原生 CLI 跳过整条归一化流水线。applyPatch 的记账也在守卫内，
+					// 原生路径那个实例是刻意构造的非激活件。
 					if !prepared.nativeGrokCLI {
+						prepared.applyPatch.RememberDispatcherEvent(eventData)
 						eventData = namespaceRestorer.restore(eventData)
 						if prepared.webSearchAlias != "" {
 							eventData = restoreXAIClientWebSearchName(eventData, prepared.webSearchAlias)
@@ -131,28 +174,19 @@ func (e *XAIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth
 					}
 					reporter.ObserveResponseModel(eventData)
 					normalizedEventName := gjson.GetBytes(eventData, "type").String()
-					switch normalizedEventName {
-					case "response.output_item.done":
-						xaiCollectOutputItemDone(eventData, outputItemsByIndex, &outputItemsFallback)
-					case "response.completed", "response.incomplete":
+					if normalizedEventName == "response.completed" || normalizedEventName == "response.incomplete" {
 						if detail, ok := helps.ParseCodexUsage(eventData); ok {
-							reporter.Publish(ctx, detail)
+							streamUsage.Observe(detail, true)
 						}
-						eventData = xaiPatchCompletedOutput(eventData, outputItemsByIndex, outputItemsFallback)
-						if !prepared.nativeGrokCLI {
-							eventData = xaiNormalizeReasoningSummaryData(eventData)
-						}
-						if normalizedEventName == "response.completed" {
-							// A truncated turn carries no replayable terminal state, so only a
-							// completed response may refresh the reasoning replay cache.
-							cacheXAIReasoningReplayFromCompleted(ctx, prepared.replayScope, eventData)
-						}
-						normalizedEventName = gjson.GetBytes(eventData, "type").String()
 					}
 
 					if hasPendingEventLine {
 						eventLine := []byte("event: " + normalizedEventName)
 						if i == 0 {
+							// ice divergence（#16）：xaiResponseEventLine 对原生 Grok CLI 原样
+							// 返回 event: 行，不做 reasoning_summary 改名。上游直接调
+							// xaiNormalizeReasoningSummaryEventLine，会把原生事件名改掉，
+							// 被 TestXAIExecutorNativeGrokCLIStreamPreservesResponseEvents 钉住。
 							eventLine = xaiResponseEventLine(prepared, pendingEventLine, normalizedEventName)
 							pendingEventLine = nil
 						}
@@ -168,7 +202,7 @@ func (e *XAIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth
 			}
 
 			if pendingEventLine != nil {
-				if !emitTranslatedLine(xaiResponseEventLine(prepared, pendingEventLine, "")) {
+				if !emitTranslatedLine(xaiNormalizeReasoningSummaryEventLine(pendingEventLine, "")) {
 					return
 				}
 				pendingEventLine = nil
@@ -178,7 +212,29 @@ func (e *XAIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth
 			}
 		}
 		if pendingEventLine != nil {
-			emitTranslatedLine(xaiResponseEventLine(prepared, pendingEventLine, ""))
+			emitTranslatedLine(xaiNormalizeReasoningSummaryEventLine(pendingEventLine, ""))
+		}
+		finishEvents, errFinish := prepared.applyPatch.FinishStream()
+		if errFinish != nil {
+			reporter.PublishFailure(ctx, statusErr{code: http.StatusBadGateway, msg: helps.ApplyPatchUpstreamErrorMessage})
+		}
+		for _, event := range finishEvents {
+			for _, chunk := range helps.TranslateStreamWithClaudeInputTokens(ctx, prepared.to, prepared.responseFormat, req.Model, prepared.originalPayload, prepared.body, event, &param, claudeInputTokens) {
+				select {
+				case out <- cliproxyexecutor.StreamChunk{Payload: chunk}:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+		if errFinish != nil {
+			errFinish = statusErr{code: http.StatusBadGateway, msg: helps.ApplyPatchUpstreamErrorMessage}
+			reporter.PublishFailure(ctx, errFinish)
+			select {
+			case out <- cliproxyexecutor.StreamChunk{Err: errFinish}:
+			case <-ctx.Done():
+			}
+			return
 		}
 		if errScan := scanner.Err(); errScan != nil {
 			helps.RecordAPIResponseError(ctx, e.cfg, errScan)

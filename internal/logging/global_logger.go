@@ -65,6 +65,7 @@ var logFieldOrder = []string{
 
 var quotedLogFields = map[string]struct{}{
 	"credential":       {},
+	"auth_id":          {},
 	"connection":       {},
 	"proxy_scheme":     {},
 	"remote_transport": {},

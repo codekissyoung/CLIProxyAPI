@@ -195,6 +195,30 @@ Key conflict sites are tagged in code with `// ice divergence: ...`.
     `stripCodexBodyTurnMetadataWorkspaces` (workspaces subtree strip) was
     already upstream-side and is unaffected.
 
+> **2026-10-02 merge note for #16**: upstream restructured the xAI responses pipeline
+> (`3ebee065` apply_patch bridging, `f1697119` failure events). Our divergence in
+> `xai_executor_execute.go` / `xai_executor_stream.go` turned out to be **only the four
+> `!prepared.nativeGrokCLI` guards** — every helper (`xaiPatchCompletedOutput`,
+> `cacheXAIReasoningReplayFromCompleted`, `xaiNormalizeReasoningSummaryData`,
+> `responseFilter`) exists upstream too, identical counts. So the correct resolution is
+> **take upstream's file wholesale, then re-add the guards** — not "keep ours", which
+> silently drops upstream's restructure and fails both upstream's new tests and ours
+> (that mistake cost several rounds on 2026-10-02).
+> Three things that bite in that order:
+>   1. `prepared.applyPatch.*` must be called **inside** the guard. Native Grok CLI goes
+>      through `prepareNativeGrokCLIResponsesRequest`, a separate prepare that upstream
+>      does not have.
+>   2. That separate prepare must still construct an **inactive** `applyPatch`
+>      (`NewApplyPatchResponsesState(from, originalPayload, nil)` → no tools → `active=false`
+>      → `Stream`/`Transform` pass through). Leaving it nil panics: upstream added
+>      `prepared.applyPatch.Bridge.TransformNonStream(...)` outside the conflict hunks, and
+>      **`.Bridge` is a field access, so nil-receiver guards would not save it**.
+>   3. Prefer the existing wrappers over hand-written guards where they exist:
+>      `xaiResponseDataEvents(prepared, …)` and `xaiResponseEventLine(prepared, …)` already
+>      encapsulate the nativeGrokCLI decision. Missing the second one leaves the `event:`
+>      line renamed while the data is not, caught by
+>      `TestXAIExecutorNativeGrokCLIStreamPreservesResponseEvents`.
+
 16. **xAI native Grok CLI passthrough** (2026-07-24, commit 25c4825b;
     `xai_executor_request.go` `xaiIsNativeGrokCLIResponsesRequest`,
     `prepareNativeGrokCLIResponsesRequest`, `nativeGrokCLI`,
@@ -209,6 +233,20 @@ Key conflict sites are tagged in code with `// ice divergence: ...`.
     constant. When upstream touches those per-event transform chains, keep
     the `nativeGrokCLI` gate and merge upstream's new transforms inside it
     (the `webSearchAlias` restore merged this way on 2026-09-19).
+
+> **2026-10-02: `internal/runtime/executor/helps/utls_client.go` belongs to this entry too**
+> even though the entry above never named the file. Our side is `codexCLIHTTPRoundTripper`
+> — the captured Codex CLI 0.147.0 OpenSSL-style ClientHello pinned to HTTP/1.1, a reusable
+> connection pool, and deterministic HTTP/WebSocket header ordering
+> (`codexCLIHTTPHeaderOrder` / `codexCLIWebsocketHeaderOrder`). Upstream `82f8e92b`
+> replaced its own path with a generic Chrome-fingerprint `utlsRoundTripper` that follows
+> ALPN and uses one connection per request. **Keep ours**: taking upstream would swap the
+> pool's TLS fingerprint to a browser and drop the header order, which is the opposite of
+> what pool-guard exists for; upstream's ALPN negotiation is also moot for us because we
+> deliberately pin HTTP/1.1 and a fixed ClientHello. Consequence: upstream's new
+> `utls_client_alpn_test.go` tests `roundTripUtlsConnection`, which does not exist in our
+> `helps` package — **delete that test file on merge** (done 2026-10-02) rather than porting
+> the implementation.
 
 19. **IPv4-only uTLS dialing on the Codex paths** (2026-09-22 merge;
     `sdk/proxyutil/proxy.go` `IPv4OnlyDialContext`/`IPv4OnlyDirect`/
