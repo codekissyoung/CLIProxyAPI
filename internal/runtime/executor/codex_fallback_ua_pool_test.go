@@ -7,16 +7,16 @@ import (
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 )
 
-func TestCodexFallbackUserAgentMatchesCapturedTUI0155(t *testing.T) {
-	want := "codex-tui/0.155.1 (Mac OS 26.5.2; arm64) iTerm.app/3.7.1beta1 (codex-tui; 0.155.1)"
+func TestCodexFallbackUserAgentMatchesCapturedTUI0160(t *testing.T) {
+	want := "codex-tui/0.160.0 (Mac OS 26.5.2; arm64) iTerm.app/3.7.1beta1 (codex-tui; 0.160.0)"
 	if codexUserAgent != want {
-		t.Fatalf("codexUserAgent = %q, want captured Codex CLI 0.155.1 UA %q", codexUserAgent, want)
+		t.Fatalf("codexUserAgent = %q, want captured Codex CLI 0.160.0 UA %q", codexUserAgent, want)
 	}
 	if codexOriginator != "codex-tui" {
 		t.Fatalf("codexOriginator = %q, want codex-tui", codexOriginator)
 	}
-	if codexVersion != "0.155.1" {
-		t.Fatalf("codexVersion = %q, want 0.155.1", codexVersion)
+	if codexVersion != "0.160.0" {
+		t.Fatalf("codexVersion = %q, want 0.160.0", codexVersion)
 	}
 }
 
