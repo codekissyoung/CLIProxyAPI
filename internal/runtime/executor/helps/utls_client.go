@@ -145,7 +145,14 @@ func codexCLIWebsocketRequestHeaderOrder(_, _ string) []string {
 }
 
 // codexCLIHTTPClientHelloSpec reproduces the deterministic reqwest/OpenSSL
-// ClientHello emitted by Codex CLI 0.147.0 on Ubuntu x86_64.
+// ClientHello emitted by Codex CLI on Ubuntu x86_64.
+//
+// Captured from 0.147.0 on 2026-08-15 and re-verified byte-identical against a
+// real codex-cli 0.160.0 binary on 2026-10-03: JA3 0b85eb0d4981e69064e40753e4f0ac5f,
+// JA4 t13d301100_1d37bd780c83_8e6e362c5eac, same extension order, groups, key
+// shares, 26 signature algorithms and no ALPN. The reqwest/OpenSSL stack did not
+// move across 0.147.0 -> 0.160.0, so do not "refresh" these bytes for a version
+// bump alone - only a fresh capture may change them.
 func codexCLIHTTPClientHelloSpec() *tls.ClientHelloSpec {
 	return &tls.ClientHelloSpec{
 		CipherSuites: []uint16{
@@ -183,7 +190,14 @@ func codexCLIHTTPClientHelloSpec() *tls.ClientHelloSpec {
 }
 
 // codexCLIWebsocketClientHelloSpec reproduces the rustls/AWS-LC handshake
-// emitted by Codex CLI 0.147.0. Rustls randomizes extension order per dial.
+// emitted by Codex CLI. Rustls randomizes extension order per dial.
+//
+// Captured from 0.147.0 on 2026-08-15; re-captured from a real codex-cli 0.160.0
+// binary on 2026-10-03, which appends the three ML-DSA signature algorithms
+// (0x0904/0x0905/0x0906) that rustls now advertises. Ciphers, extension set,
+// groups, key shares and the missing ALPN are unchanged. Stable JA4 moved from
+// t13d101000_61a7ad8aa9b6_f9531d972513 to t13d101000_61a7ad8aa9b6_0d308c48d2a3
+// (JA4_c covers signature algorithms; JA4_a/JA4_b are untouched).
 func codexCLIWebsocketClientHelloSpec() *tls.ClientHelloSpec {
 	extensions := []tls.TLSExtension{
 		&tls.SNIExtension{},
@@ -195,6 +209,8 @@ func codexCLIWebsocketClientHelloSpec() *tls.ClientHelloSpec {
 		&tls.SignatureAlgorithmsExtension{SupportedSignatureAlgorithms: []tls.SignatureScheme{
 			0x0503, 0x0403, 0x0603, 0x0807, 0x0806,
 			0x0805, 0x0804, 0x0601, 0x0501, 0x0401,
+			// ML-DSA, appended by rustls as of codex-cli 0.160.0.
+			0x0904, 0x0905, 0x0906,
 		}},
 		&tls.ExtendedMasterSecretExtension{},
 		&tls.SessionTicketExtension{},

@@ -243,7 +243,9 @@ func TestClaudeCodeTLSClientHelloSpecMatches220Capture(t *testing.T) {
 	}
 }
 
-func TestCodexCLIHTTPClientHelloSpecMatches0147Capture(t *testing.T) {
+// HTTPS 基线：0.147.0 抓的字节，2026-10-03 用真实 codex-cli 0.160.0 复抓逐项一致
+// （JA3 0b85eb0d…、JA4 t13d301100_1d37bd780c83_8e6e362c5eac），因此版本号升级不改字节。
+func TestCodexCLIHTTPClientHelloSpecMatches0160Capture(t *testing.T) {
 	t.Parallel()
 
 	spec := codexCLIHTTPClientHelloSpec()
@@ -295,13 +297,15 @@ func TestCodexCLIHTTPClientHelloSpecMatches0147Capture(t *testing.T) {
 	}
 }
 
-func TestCodexCLIWebsocketClientHelloSpecMatches0147Capture(t *testing.T) {
+// WS 基线：2026-10-03 复抓 0.160.0 发现 rustls 在 sigalgs 末尾追加三个 ML-DSA
+// （0x0904/0x0905/0x0906 = 2308/2309/2310），其余与 0.147.0 相同。
+func TestCodexCLIWebsocketClientHelloSpecMatches0160Capture(t *testing.T) {
 	t.Parallel()
 
 	wantCiphers := []uint16{4866, 4865, 4867, 49196, 49195, 52393, 49200, 49199, 52392, 255}
 	wantExtensions := []uint16{0, 5, 10, 11, 13, 23, 35, 43, 45, 51}
 	wantGroups := []uint16{4588, 29, 23, 24}
-	wantSignatures := []uint16{1283, 1027, 1539, 2055, 2054, 2053, 2052, 1537, 1281, 1025}
+	wantSignatures := []uint16{1283, 1027, 1539, 2055, 2054, 2053, 2052, 1537, 1281, 1025, 2308, 2309, 2310}
 	wantVersions := []uint16{772, 771}
 	wantShares := []uint16{4588, 29}
 	orders := make(map[string]struct{})

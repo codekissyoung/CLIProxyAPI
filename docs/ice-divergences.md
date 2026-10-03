@@ -236,7 +236,8 @@ Key conflict sites are tagged in code with `// ice divergence: ...`.
 
 > **2026-10-02: `internal/runtime/executor/helps/utls_client.go` belongs to this entry too**
 > even though the entry above never named the file. Our side is `codexCLIHTTPRoundTripper`
-> — the captured Codex CLI 0.147.0 OpenSSL-style ClientHello pinned to HTTP/1.1, a reusable
+> — the captured Codex CLI OpenSSL-style ClientHello pinned to HTTP/1.1 (抓于 0.147.0,
+> 2026-10-03 用真实 0.160.0 复抓逐字节一致), a reusable
 > connection pool, and deterministic HTTP/WebSocket header ordering
 > (`codexCLIHTTPHeaderOrder` / `codexCLIWebsocketHeaderOrder`). Upstream `82f8e92b`
 > replaced its own path with a generic Chrome-fingerprint `utlsRoundTripper` that follows
@@ -270,15 +271,17 @@ Key conflict sites are tagged in code with `// ice divergence: ...`.
     `internal/registry/models/models.json` `gpt-5.6-luna.override_header`;
     pinned by `codex_fallback_ua_pool_test.go`,
     `internal/registry/model_definitions_test.go`)
-    ice presents `codex-tui/0.155.1 (Mac OS 26.5.2; arm64)
-    iTerm.app/3.7.1beta1 (codex-tui; 0.155.1)` while upstream's executor is
-    still on 0.154.0, because the codex client catalog gates
-    `gpt-6-sol`/`gpt-6-luna` behind `minimal_client_version` 0.155.0. The
+    ice presents `codex-tui/0.160.0 (Mac OS 26.5.2; arm64)
+    iTerm.app/3.7.1beta1 (codex-tui; 0.160.0)` (0.155.1 → 0.160.0 on
+    2026-10-03) while upstream's executor trails, because the codex client
+    catalog gates newer models behind `minimal_client_version`. The
     per-model `override_header` UA in `models.json` is bumped with it so a
     single account never switches UA between models (upstream regenerates
-    that file, so re-apply the bump on merges that touch it). See
+    that file, so re-apply the bump on merges that touch it) — this is now
+    enforced by `codex_wire_identity_lockstep_test.go` after the 0.160.0
+    bump initially left `models.json` on 0.155.1. See
     `docs/multi-user-pro-account-hardening.md` for the dated history; drop
-    this divergence once upstream's own identity passes 0.155.1.
+    this divergence once upstream's own identity catches up.
 
 ## Translators (internal/translator)
 

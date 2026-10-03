@@ -1819,7 +1819,13 @@ func TestApplyCodexWebsocketHeaders_EmptyAPIKey_OmitsAuthorizationAndOAuthHeader
 }
 
 func TestApplyModelHeaderOverridesFromModelConfig(t *testing.T) {
-	const wantUA = "codex-tui/0.155.1 (Mac OS 26.5.2; arm64) iTerm.app/3.7.1beta1 (codex-tui; 0.155.1)"
+	// 从 models.json 现取，别再写死版本号——写死过一次（0.155.1），
+	// 导致 2026-10-03 升 0.160.0 时这条测试成了"改动的阻力"而不是守卫。
+	// 版本一致性本身由 codex_wire_identity_lockstep_test.go 负责。
+	wantUA := registry.ModelOverrideHeaders("gpt-5.6-luna")["user-agent"]
+	if wantUA == "" {
+		t.Fatal("models.json 里 gpt-5.6-luna 的 override user-agent 不该为空")
+	}
 	req, err := http.NewRequest(http.MethodPost, "https://example.com/responses", nil)
 	if err != nil {
 		t.Fatalf("NewRequest() error = %v", err)

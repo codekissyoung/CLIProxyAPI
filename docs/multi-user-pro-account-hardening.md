@@ -1,16 +1,16 @@
-# 多人共用 Pro 账号：Codex CLI 0.155.1 上游身份收敛
+# 多人共用 Pro 账号：Codex CLI 0.160.0 上游身份收敛
 
 ## 目标
 
 `ice` 分支把同一 OAuth 账号的上游请求收敛为上游捕获的
-Codex CLI 0.155.1 TUI 身份，而不是暴露各下游客户端的系统、版本和传输栈差异。
+Codex CLI 0.160.0 TUI 身份，而不是暴露各下游客户端的系统、版本和传输栈差异。
 这只改变上游可见身份，不改变账号选择、会话黏性、计费或响应翻译。
 
 当前固定应用身份为：
 
-- `User-Agent: codex-tui/0.155.1 (Mac OS 26.5.2; arm64) iTerm.app/3.7.1beta1 (codex-tui; 0.155.1)`
+- `User-Agent: codex-tui/0.160.0 (Mac OS 26.5.2; arm64) iTerm.app/3.7.1beta1 (codex-tui; 0.160.0)`
 - `Originator: codex-tui`
-- 缺失时补 `Version: 0.155.1`
+- 缺失时补 `Version: 0.160.0`
 - 缺失时补 `X-Codex-Beta-Features: remote_compaction_v2`
 
 > 2026-09-05：应用层身份从 0.147.0 升到 0.153.4。OpenAI 后端对
@@ -29,6 +29,11 @@ Codex CLI 0.155.1 TUI 身份，而不是暴露各下游客户端的系统、版�
 > 2026-09-16：应用层身份随上游合并升到 0.154.0，UA 同时换成上游捕获的
 > Mac OS/iTerm 字符串（放弃自组的 Ubuntu/vscode 字符串，与上游观测身份保持
 > 一致）；TLS ClientHello 基线不变。
+>
+> 2026-10-03：应用层身份升到 0.160.0（commit `ba1ec37c`），`models.json` 里四个
+> 带 `override_header` 的模型同步跟上——首次升级漏了这一步，同一账号会按模型在
+> 0.160.0 与 0.155.1 之间切 UA；现由 `codex_wire_identity_lockstep_test.go` 守住。
+> 同日用真实 0.160.0 二进制复抓传输层，详见下面「0.160.0 传输基线」。
 >
 > 2026-09-23：应用层身份升到 0.155.1。触发原因是上游合入的 codex 客户端
 > 模型目录把 `gpt-6-sol` / `gpt-6-luna` 的 `minimal_client_version` 定在
@@ -93,11 +98,28 @@ API-key 路径继续保留调用方显式身份，但绝不允许空 UA 退化�
 > `X-Client-Request-Id` 恢复真实客户端的每请求 UUID 语义（透传或新生成），
 > 不再被覆写为会话常量；各路径返回给客户端的错误体先做混淆值反向还原。
 
-## 0.147.0 传输基线
+## 0.160.0 传输基线
 
 2026-08-15 使用本机官方 Codex CLI 0.147.0 二进制分别捕获 HTTPS fallback、
 Responses WebSocket 和 TUI/exec 请求头。抓包只使用 dummy Bearer；临时 pcap、
 TLS key log 和探针文件验证后已删除。
+
+**2026-10-03 用真实 codex-cli 0.160.0 复抓核对**（本机 `~/.npm-global/bin/codex`
+0.160.0，配一个 `CODEX_HOME` 临时目录 + 指向 loopback 的自定义 provider 和 dummy
+key，由只读第一个 TLS record 的本地监听器记录 ClientHello；**全程不出网、不碰任何
+供应商**，探针文件已删）：
+
+- **HTTPS 面逐项一致，字节一个都没改**：JA3 `0b85eb0d4981e69064e40753e4f0ac5f`、
+  JA4 `t13d301100_1d37bd780c83_8e6e362c5eac`、扩展顺序、supported groups、key
+  shares、26 项 signature algorithms、不声明 ALPN 全部对上。reqwest/OpenSSL 栈在
+  0.147.0 → 0.160.0 之间没有变化，**所以升版本号不要去"刷新"这些字节**，只有重新
+  抓包才可以改。
+- **WebSocket 面有一处真实漂移**：rustls 现在在 signature_algorithms 末尾追加三个
+  ML-DSA（`0x0904`/`0x0905`/`0x0906`）。cipher 顺序、扩展集合、supported groups、
+  key shares、无 ALPN 均未变，所以稳定 JA4 只有第三段变化：
+  `t13d101000_61a7ad8aa9b6_f9531d972513` → `t13d101000_61a7ad8aa9b6_0d308c48d2a3`
+  （JA4_c 覆盖 signature algorithms，JA4_a/JA4_b 不动）。fixture 已补齐并由离线
+  回归测试锁定。本站 WSS 自 2026-09-09 全站关闭，这条在重开 WS 之前不影响线上流量。
 
 ### HTTPS Responses
 
@@ -113,9 +135,11 @@ TLS key log 和探针文件验证后已删除。
 ### Responses WebSocket
 
 - TLS 实现特征：rustls 0.23 + AWS-LC
-- 稳定 JA4：`t13d101000_61a7ad8aa9b6_f9531d972513`
+- 稳定 JA4：`t13d101000_61a7ad8aa9b6_0d308c48d2a3`（2026-10-03 起；0.147.0 抓的是
+  `…_f9531d972513`，差异只在 rustls 新增的三个 ML-DSA sigalg）
 - cipher 顺序：`4866,4865,4867,49196,49195,52393,49200,49199,52392,255`
 - 扩展集合：`0,5,10,11,13,23,35,43,45,51`
+- signature algorithms：`1283,1027,1539,2055,2054,2053,2052,1537,1281,1025,2308,2309,2310`
 - supported groups：`4588,29,23,24`
 - key shares：`4588,29`
 - 不声明 ALPN，使用 HTTP/1.1 Upgrade
