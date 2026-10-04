@@ -694,6 +694,13 @@ func (m *Manager) refreshAuthForRequestAtEpoch(ctx context.Context, id, failedAc
 			current.LastError = refreshErrorFromError(err)
 
 			isDisabled = current.Disabled || current.Status == StatusDisabled
+			// Count here, ahead of upstream's branch chain, so every enabled
+			// outcome is covered: per-branch call sites were silently dropped
+			// by the 2026-09-30 merge and bypassed by a branch upstream added
+			// on 2026-10-03.
+			if recordRevocation && !isDisabled {
+				metrics.RecordAccountInvalidation(current.ID)
+			}
 			hasValidAccessToken := current.HasValidAccessToken(now)
 			// failedAccessToken is set only when upstream rejected this exact access
 			// token. Its expiry time no longer proves it is usable.
@@ -745,9 +752,6 @@ func (m *Manager) refreshAuthForRequestAtEpoch(ctx context.Context, id, failedAc
 					shouldReschedule = true
 				}
 			} else {
-				if recordRevocation {
-					metrics.RecordAccountInvalidation(current.ID)
-				}
 				// Access token remains valid. Preserve current in-flight/cooldown status without overwrite.
 				nextRetry := now.Add(refreshFailureBackoff)
 				if invalidGrant {

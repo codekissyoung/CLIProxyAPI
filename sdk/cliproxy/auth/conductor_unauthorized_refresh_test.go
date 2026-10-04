@@ -682,6 +682,47 @@ func TestManager_RefreshAuthForRequest_RevocationCountedOnce(t *testing.T) {
 	}
 }
 
+func TestManager_RefreshAuthForRequest_RevocationCountedOnceWhenAccessTokenExpired(t *testing.T) {
+	m, _, primary, _, _ := newUnauthorizedRefreshFixture(t, true)
+	updated, ok := m.GetByID(primary.ID)
+	if !ok || updated == nil {
+		t.Fatal("primary auth missing")
+	}
+	updated.Metadata["expired"] = time.Now().Add(-time.Hour).Format(time.RFC3339)
+	if _, errUpdate := m.Update(context.Background(), updated); errUpdate != nil {
+		t.Fatalf("update primary: %v", errUpdate)
+	}
+
+	before := invalidationCounterValue(t, primary.ID)
+	for i := 0; i < 2; i++ {
+		if _, err := m.refreshAuthForRequest(context.Background(), primary.ID, ""); err == nil {
+			t.Fatalf("refreshAuthForRequest %d error = nil, want unauthorized refresh failure", i)
+		}
+	}
+	after := invalidationCounterValue(t, primary.ID)
+	if delta := after - before; delta != 1 {
+		t.Fatalf("invalidations delta = %v, want exactly 1 when the access token is already expired", delta)
+	}
+}
+
+func TestManager_RefreshAuthForRequest_RevocationCountedOnceOnRejectedTokenInvalidGrant(t *testing.T) {
+	m, executor, primary, _, _ := newUnauthorizedRefreshFixture(t, false)
+	executor.mu.Lock()
+	executor.refreshErr = &Error{HTTPStatus: http.StatusUnauthorized, Message: `{"error": "invalid_grant", "error_description": "Refresh token not found or invalid"}`}
+	executor.mu.Unlock()
+
+	before := invalidationCounterValue(t, primary.ID)
+	for i := 0; i < 2; i++ {
+		if _, err := m.refreshAuthForRequest(context.Background(), primary.ID, "stale-access-token"); err == nil {
+			t.Fatalf("refreshAuthForRequest %d error = nil, want invalid grant refresh failure", i)
+		}
+	}
+	after := invalidationCounterValue(t, primary.ID)
+	if delta := after - before; delta != 1 {
+		t.Fatalf("invalidations delta = %v, want exactly 1 on the terminal rejected-token path", delta)
+	}
+}
+
 func TestManager_Execute_UnauthorizedWithoutRefreshTokenDoesNotCallRefresh(t *testing.T) {
 	model := "gpt-5.5"
 	primary := &Auth{

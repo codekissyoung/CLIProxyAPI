@@ -57,7 +57,16 @@ Key conflict sites are tagged in code with `// ice divergence: ...`.
    into the unauthorized state, including under upstream's
    `hasValidAccessToken` retention path (where the credential is never marked
    unavailable; `previousUnauthorized` from `LastError` is the transition
-   marker). Pinned by `TestManager_RefreshAuthForRequest_RevocationCountedOnce`.
+   marker). Pinned by `TestManager_RefreshAuthForRequest_RevocationCountedOnce`
+   and its `...WhenAccessTokenExpired` / `...OnRejectedTokenInvalidGrant`
+   siblings.
+   2026-10-04: the single call site now sits ahead of upstream's branch chain
+   (gated on `!isDisabled`) instead of inside individual branches. The
+   2026-09-30 merge had silently dropped the call in the expired-access-token
+   branch, and upstream's 2026-10-03 `accessTokenRejected && invalidGrant`
+   branch bypassed the remaining one; neither was caught because only the
+   retention path was tested. Disabled credentials are still not counted, and
+   an HTTP 400 `invalid_grant` is still not a counted revocation (see below).
    2026-09-30 merge: the separate, **unlisted** widening of
    `isUnauthorizedError` to treat `invalid_grant`/`invalid_token` as 401 was
    removed as merge residue per the policy above. Upstream now owns
