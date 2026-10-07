@@ -23,6 +23,7 @@ import (
 )
 
 type xaiPreparedRequest struct {
+	finalizePayload       helps.PayloadFinalizer
 	applyPatch            *helps.ApplyPatchResponsesState
 	baseModel             string
 	from                  sdktranslator.Format
@@ -120,7 +121,19 @@ func (e *XAIExecutor) prepareNativeGrokCLIResponsesRequest(ctx context.Context, 
 		// 用 nil declarations 构造 → tools 为空 → active 保持 false → Stream/Transform
 		// 直通、Bridge 可用，既不 panic 也不改变 #16 要的「绕开流水线」语义。
 		// 加 nil 保护解决不了，因为 .Bridge 是字段访问而非方法调用。
-		applyPatch:           helps.NewApplyPatchResponsesState(from, originalPayload, nil),
+		applyPatch: helps.NewApplyPatchResponsesState(from, originalPayload, nil),
+		// 同一类陷阱的第二次：2026-10-02 是 applyPatch 留 nil 导致 panic，
+		// 2026-10-07 合并时上游新增了 finalizePayload（helps.PayloadFinalizer），
+		// 在 execute/stream/tokens/websockets 四处被无条件调用
+		// （xai_executor_execute.go:50 / :231、xai_executor_stream.go:44、
+		// xai_executor_tokens.go:25、xai_websockets_executor.go:522），
+		// 这条独立 prepare 不给就 panic（TestXAIExecutorNativeGrokCLINonStreamReturnsResponseObject
+		// 以 SIGSEGV 抓到）。参数与 prepareResponsesRequestTo 一致，to 用
+		// FormatCodex 以匹配本结构体的 to 字段。
+		//
+		// 规律记下来：**上游往 xaiPreparedRequest 加任何新字段，这条 prepare 都要跟着补**，
+		// 否则只有原生 Grok CLI 路径会炸，而那条路径只有 #16 的测试覆盖。
+		finalizePayload:      helps.NewPayloadFinalizer(e.cfg, e.Identifier(), baseModel, sdktranslator.FormatCodex.String(), "", originalTranslated, req, opts),
 		baseModel:            baseModel,
 		from:                 from,
 		responseFormat:       responseFormat,
@@ -153,9 +166,7 @@ func (e *XAIExecutor) prepareResponsesRequestTo(ctx context.Context, req cliprox
 		return nil, err
 	}
 
-	requestedModel := helps.PayloadRequestedModel(opts, req.Model)
-	requestPath := helps.PayloadRequestPath(opts)
-	body = helps.ApplyPayloadConfigWithRequestForExecutor(e.cfg, e.Identifier(), baseModel, to.String(), from.String(), "", body, originalTranslated, requestedModel, requestPath, opts.Headers)
+	finalizePayload := helps.NewPayloadFinalizer(e.cfg, e.Identifier(), baseModel, to.String(), "", originalTranslated, req, opts)
 	body = helps.SetStringIfDifferent(body, "model", baseModel)
 	body = helps.SetBoolIfDifferent(body, "stream", stream)
 	body, _ = sjson.DeleteBytes(body, "previous_response_id")
@@ -230,6 +241,7 @@ func (e *XAIExecutor) prepareResponsesRequestTo(ctx context.Context, req cliprox
 	}
 
 	return &xaiPreparedRequest{
+		finalizePayload:       finalizePayload,
 		applyPatch:            applyPatch,
 		baseModel:             baseModel,
 		from:                  from,
@@ -330,9 +342,9 @@ func xaiUsingAPI(auth *cliproxyauth.Auth) bool {
 // is false (including its OAuth default), empty or official default base_url is
 // rewritten to the CLI chat-proxy endpoint; an explicit non-default base_url is
 // still honored.
-// Websocket and compact transports intentionally do not use this helper:
-// cli-chat-proxy does not implement /responses/compact (404) or websocket
-// upgrades (405).
+// Websocket, compact, and speech intentionally do not use this helper:
+// cli-chat-proxy does not implement /responses/compact (404), websocket
+// upgrades (405), or /tts. Speech uses xaiSpeechRequestURL.
 func xaiChatBaseURL(auth *cliproxyauth.Auth) string {
 	_, baseURL := xaiCreds(auth)
 	if xaiUsingAPI(auth) {
@@ -636,6 +648,16 @@ func normalizeXAIImageRef(value any) bool {
 
 func xaiIsVideoRequest(opts cliproxyexecutor.Options) bool {
 	return opts.SourceFormat.String() == xaiVideoHandlerType
+}
+
+func xaiIsSpeechRequest(opts cliproxyexecutor.Options) bool {
+	return opts.SourceFormat.String() == xaiSpeechHandlerType
+}
+
+// xaiSpeechRequestURL stays on the official API. cli-chat-proxy does not implement /tts,
+// and a 404 there would cool the OAuth auth down as not_found.
+func xaiSpeechRequestURL(auth *cliproxyauth.Auth) string {
+	return strings.TrimSuffix(xaiCompactBaseURL(auth), "/") + xaiTTSPath
 }
 
 func xaiVideoEndpointPath(opts cliproxyexecutor.Options) string {

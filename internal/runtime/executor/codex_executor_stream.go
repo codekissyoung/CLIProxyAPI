@@ -57,9 +57,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 		return nil, err
 	}
 
-	requestedModel := helps.PayloadRequestedModel(opts, req.Model)
-	requestPath := helps.PayloadRequestPath(opts)
-	body = helps.ApplyPayloadConfigWithRequestForExecutor(e.cfg, e.Identifier(), baseModel, to.String(), from.String(), "", body, originalTranslated, requestedModel, requestPath, opts.Headers)
+	ctx = helps.WithPayloadFinalizer(ctx, helps.NewPayloadFinalizer(e.cfg, e.Identifier(), baseModel, to.String(), "", originalTranslated, req, opts))
 	body, _ = sjson.DeleteBytes(body, "previous_response_id")
 	body, _ = sjson.DeleteBytes(body, "generate")
 	body, _ = sjson.DeleteBytes(body, "prompt_cache_retention")
@@ -82,13 +80,16 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	if errReplay != nil {
 		return nil, errReplay
 	}
-	reporter.SetTranslatedReasoningEffort(body, to.String())
 
 	url := strings.TrimSuffix(baseURL, "/") + "/responses"
 	httpReq, upstreamBody, err := e.cacheHelper(ctx, from, url, req, body, opts.Headers)
 	if err != nil {
 		return nil, err
 	}
+	// 上游的 reporter 记账放在前面：它是纯记录，且上游各路径都假定它已被调用。
+	reporter.SetTranslatedReasoningEffort(upstreamBody, to.String())
+	// ice divergence #10（Codex 上游错误诊断 / context-reject 门禁）：上游没有等价物。
+	// 放在 reporter 之后，这样被 block 的请求在上游视角里记账状态仍然一致。
 	helps.LogCodexRequestProfile(ctx, "codex-http-stream", baseModel, upstreamBody)
 	if blockErr, blocked := codexContextRejectBlocked(ctx, e, "http", baseModel, auth, opts, upstreamBody); blocked {
 		return nil, blockErr

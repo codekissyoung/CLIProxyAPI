@@ -1095,6 +1095,14 @@ const xaiFreeUsageExhaustedCooldown = 24 * time.Hour
 //
 // Generic 429s stay without an explicit retry hint so conductor backoff still applies.
 func xaiStatusErr(code int, body []byte) statusErr {
+	// ice divergence（422 降级，commit 5f84a169 "stop Codex CLI 422 retry loops on
+	// /v1/responses"）：上游把 422 原样透出，而 Codex CLI 收到 422 会无限重试同一个
+	// 请求。这里把它降成不可重试的 400 并保留原始 message。
+	//
+	// 2026-10-07 合并时收窄了作用范围：上游新增了 Grok TTS（/v1/audio/speech）并带来
+	// TestXAIExecutorExecuteSpeechUpstreamErrorScope，要求语音路径的 422 保持 422
+	// （"text too long" / "model is not supported" 对调用方是有意义的 422）。语音路径
+	// 没有 Codex CLI 那个重试循环，所以它走 xaiStatusErrBase，不继承这条降级。
 	if code == http.StatusUnprocessableEntity {
 		message := strings.TrimSpace(gjson.GetBytes(body, "error").String())
 		if message == "" {
@@ -1109,6 +1117,12 @@ func xaiStatusErr(code int, body []byte) statusErr {
 		wrapped, _ = sjson.SetBytes(wrapped, "error.code", "invalid_request")
 		return statusErr{code: http.StatusBadRequest, msg: string(wrapped)}
 	}
+	return xaiStatusErrBase(code, body)
+}
+
+// xaiStatusErrBase 是上游语义的状态码映射（403→401 的凭据失效、429 的免费额度耗尽
+// 冷却），**不含** ice 的 422 降级。需要保留上游 422 语义的路径调用它。
+func xaiStatusErrBase(code int, body []byte) statusErr {
 	err := statusErr{code: code, msg: string(body)}
 	if len(body) == 0 {
 		return err

@@ -52,9 +52,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 		return resp, err
 	}
 
-	requestedModel := helps.PayloadRequestedModel(opts, req.Model)
-	requestPath := helps.PayloadRequestPath(opts)
-	body = helps.ApplyPayloadConfigWithRequestForExecutor(e.cfg, e.Identifier(), baseModel, to.String(), from.String(), "", body, originalTranslated, requestedModel, requestPath, opts.Headers)
+	ctx = helps.WithPayloadFinalizer(ctx, helps.NewPayloadFinalizer(e.cfg, e.Identifier(), baseModel, to.String(), "", originalTranslated, req, opts))
 	body = helps.SetStringIfDifferent(body, "model", baseModel)
 	body = helps.SetBoolIfDifferent(body, "stream", true)
 	body, _ = sjson.DeleteBytes(body, "previous_response_id")
@@ -74,13 +72,15 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	if errReplay != nil {
 		return resp, errReplay
 	}
-	reporter.SetTranslatedReasoningEffort(body, to.String())
 
 	url := strings.TrimSuffix(baseURL, "/") + "/responses"
 	httpReq, upstreamBody, err := e.cacheHelper(ctx, from, url, req, body, opts.Headers)
 	if err != nil {
 		return resp, err
 	}
+	// 上游的 reporter 记账放在前面（纯记录，上游各路径都假定它已被调用）。
+	reporter.SetTranslatedReasoningEffort(upstreamBody, to.String())
+	// ice divergence #10（Codex 上游错误诊断 / context-reject 门禁）：上游没有等价物。
 	helps.LogCodexRequestProfile(ctx, "codex-http-execute", baseModel, upstreamBody)
 	if blockErr, blocked := codexContextRejectBlocked(ctx, e, "http", baseModel, auth, opts, upstreamBody); blocked {
 		return resp, blockErr
@@ -162,7 +162,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 
 		eventData := bytes.TrimSpace(line[5:])
 		eventData = helps.RestoreCodexMultiAgentV2Response(eventData, optimizeMultiAgentV2)
-		reporter.ObserveCodexResponseModel(eventData)
+		reporter.ObserveResponseModel(eventData)
 		eventType := gjson.GetBytes(eventData, "type").String()
 
 		if helps.HasMeaningfulCodexOutputDelta(eventData) {
@@ -259,9 +259,7 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 		return resp, err
 	}
 
-	requestedModel := helps.PayloadRequestedModel(opts, req.Model)
-	requestPath := helps.PayloadRequestPath(opts)
-	body = helps.ApplyPayloadConfigWithRequestForExecutor(e.cfg, e.Identifier(), baseModel, to.String(), from.String(), "", body, originalTranslated, requestedModel, requestPath, opts.Headers)
+	ctx = helps.WithPayloadFinalizer(ctx, helps.NewPayloadFinalizer(e.cfg, e.Identifier(), baseModel, to.String(), "", originalTranslated, req, opts))
 	body = helps.SetStringIfDifferent(body, "model", baseModel)
 	body, _ = sjson.DeleteBytes(body, "stream")
 	body = normalizeCodexInstructions(body, helps.IsNativeCodexRequest(req.Payload, opts))
@@ -269,13 +267,15 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 	body = normalizeCodexParallelToolCalls(body, opts.Headers)
 	body = helps.NormalizeCodexToolSchemas(body)
 	body, optimizeMultiAgentV2 := helps.OptimizeCodexMultiAgentV2RequestForAuth(ctx, opts.Headers, body, e.cfg, auth, isCompat)
-	reporter.SetTranslatedReasoningEffort(body, to.String())
 
 	url := strings.TrimSuffix(baseURL, "/") + "/responses/compact"
 	httpReq, upstreamBody, err := e.cacheHelper(ctx, from, url, req, body, opts.Headers)
 	if err != nil {
 		return resp, err
 	}
+	// 上游的 reporter 记账放在前面（纯记录，上游各路径都假定它已被调用）。
+	reporter.SetTranslatedReasoningEffort(upstreamBody, to.String())
+	// ice divergence #10（Codex 上游错误诊断 / context-reject 门禁）：上游没有等价物。
 	helps.LogCodexRequestProfile(ctx, "codex-http-compact", baseModel, upstreamBody)
 	if blockErr, blocked := codexContextRejectBlocked(ctx, e, "http", baseModel, auth, opts, upstreamBody); blocked {
 		return resp, blockErr

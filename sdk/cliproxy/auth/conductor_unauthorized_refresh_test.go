@@ -669,7 +669,18 @@ func TestManager_RefreshAuthForRequest_RevocationCountedOnce(t *testing.T) {
 
 	before := invalidationCounterValue(t, primary.ID)
 	for i := 0; i < 2; i++ {
-		if _, err := m.refreshAuthForRequest(context.Background(), primary.ID, "stale-access-token"); err == nil {
+		// 2026-10-07 适配上游语义：upstream 50d5fe18（avoid selecting rejected
+		// credentials during refresh）新增 RejectedAccessToken 标记，第二次用同一个
+		// 已被拒 token 走请求路径会被短路、不再调用 Refresh；而换一个 token 又会撞上
+		// 935aa6e3（prevent in-flight refresh from overwriting concurrently updated
+		// credentials）的「不是当前 token 就认为别人已刷新」早退，直接返回 nil。
+		//
+		// 两条短路都是上游有意为之，所以「反复刷新一个已撤销凭据」在新语义下只发生在
+		// 强制/调度路径上——这正是本测试注释描述的场景（号池停止调度前会刷新若干次）。
+		// 因此改走 withForceRefresh，既真正打出两次 Refresh、又守住分叉 #5 的不变式
+		// 「撤销只计一次」。退回原写法会让 delta==1 平凡成立，测试就失去防重复计数的作用。
+		ctx := withForceRefresh(context.Background())
+		if _, err := m.refreshAuthForRequest(ctx, primary.ID, "stale-access-token"); err == nil {
 			t.Fatalf("refreshAuthForRequest %d error = nil, want unauthorized refresh failure", i)
 		}
 	}

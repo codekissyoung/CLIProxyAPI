@@ -201,8 +201,19 @@ Key conflict sites are tagged in code with `// ice divergence: ...`.
     generated identifier can now appear under two pool accounts after
     failover. If a correlation/ban concern reappears, this entry is the
     starting point — the removed code is on `ice-pool-guard-premerge-20260930`.
-    `stripCodexBodyTurnMetadataWorkspaces` (workspaces subtree strip) was
-    already upstream-side and is unaffected.
+    ~~`stripCodexBodyTurnMetadataWorkspaces` (workspaces subtree strip) was
+    already upstream-side and is unaffected.~~
+    **CORRECTED 2026-10-07**: that was wrong — `git grep
+    stripCodexBodyTurnMetadataWorkspaces upstream/main` is now empty. The
+    function is defined on our side (`codex_executor_request.go`) and is a real
+    ice divergence: it strips the `workspaces` subtree (local paths, git
+    remotes, commit hashes) from the body-mirrored
+    `client_metadata.x-codex-turn-metadata` so it never leaves the proxy. The
+    strip is unconditional and must be kept on every merge. In the 2026-10-07
+    merge upstream split request cleanup out of
+    `frameCodexWebsocketRequestBody` (framing stays pure) into the new
+    `buildCodexWebsocketRequestBody`, so the call moved there, after
+    `helps.SanitizeCodexInputItemIDs`.
 
 > **2026-10-02 merge note for #16**: upstream restructured the xAI responses pipeline
 > (`3ebee065` apply_patch bridging, `f1697119` failure events). Our divergence in
@@ -291,6 +302,43 @@ Key conflict sites are tagged in code with `// ice divergence: ...`.
     bump initially left `models.json` on 0.155.1. See
     `docs/multi-user-pro-account-hardening.md` for the dated history; drop
     this divergence once upstream's own identity catches up.
+
+21. **xAI 422 downgraded to a non-retryable 400** (2026-07-20, commit
+    `5f84a169`; `xai_executor_response.go` `xaiStatusErr`;
+    pinned by `codex_responses_lite_422_test.go`
+    `TestXAIStatusErrDowngrades422ToNonRetryable400`)
+    **Added to this list 2026-10-07 — it had been shipped since 2026-07-20 but
+    was never recorded here**, and the 2026-10-07 merge nearly deleted it under
+    the "unlisted divergence is merge residue" policy. Only its own test saved
+    it. Upstream passes 422 through; Codex CLI responds to a 422 by retrying the
+    same request forever, so ice rewrites it to a non-retryable 400 while
+    preserving the original upstream message.
+    **Scope narrowed 2026-10-07**: upstream added Grok TTS
+    (`/v1/audio/speech`, PR #6418) with
+    `TestXAIExecutorExecuteSpeechUpstreamErrorScope`, which requires the speech
+    path to keep 422 (`text too long` / `model is not supported` are meaningful
+    422s to the caller, and that path has no Codex CLI retry loop). The
+    function is therefore split: `xaiStatusErrBase` carries upstream semantics
+    (403→401 bad credentials, 429 free-usage cooldown) and `xaiStatusErr` adds
+    the ice 422 downgrade on top. `xaiSpeechStatusErr` calls the base. When
+    adding a new xAI surface, decide deliberately which of the two it needs.
+
+22. **`xaiPreparedRequest` new fields must be mirrored into the native Grok CLI
+    prepare** (operational rule, not a code divergence; learned twice)
+    Divergence #16 routes native Grok CLI requests through the separate
+    `prepareNativeGrokCLIResponsesRequest`, which builds `xaiPreparedRequest`
+    by hand. Every field upstream adds to that struct and then calls
+    unconditionally on the execute/stream/tokens/websocket paths must be
+    populated there too, or **only the native Grok CLI path panics** — and that
+    path is covered solely by #16's own tests.
+    History: 2026-10-02 it was `applyPatch` (nil → panic on
+    `prepared.applyPatch.Bridge`, a field access that no nil guard can save);
+    2026-10-07 it was `finalizePayload` (`helps.PayloadFinalizer`, called at
+    `xai_executor_execute.go:50`/`:231`, `xai_executor_stream.go:44`,
+    `xai_executor_tokens.go:25`, `xai_websockets_executor.go:522`), caught by
+    `TestXAIExecutorNativeGrokCLINonStreamReturnsResponseObject` as a SIGSEGV.
+    On every merge that touches `xai_executor_request.go`, diff the two
+    constructors field by field.
 
 ## Translators (internal/translator)
 
