@@ -51,12 +51,12 @@ const (
 	xaiTokenAuthValue           = "xai-grok-cli"
 	xaiClientVersionHeader      = "x-grok-client-version"
 	xaiClientIdentifierHeader   = "x-grok-client-identifier"
-	// 版本号跟随上游：chat-proxy 对过低版本回 HTTP 426（2026-10-01 起要求 1.0.13+，
+	// Follows the official Grok CLI: chat-proxy answers HTTP 426 to stale versions (1.0.13+ required since 2026-10-01,
 	// 上游 #6249）。我们线上 CPA 日志近 48h 已有 45 条 426，所以这个提升是修线上故障。
 	// 语义仍是**兜底**：带了 Grok CLI 版本的请求转发自己的版本
 	// （见 applyXAIGrokCLIClientVersion，分叉 #16 原生 Grok CLI 透传）。
 	// 头名只经 r.Header.Set() 使用，Go 会规范化，所以常量大小写在线上无影响。
-	xaiClientVersionValue         = "1.0.44"
+	xaiClientVersionValue         = "1.0.46"
 	xaiClientIdentifierValue      = "grok-shell"
 	xaiAuthenticateResponseHeader = "x-authenticateresponse"
 	xaiAuthenticateResponseValue  = "authenticate-response"
