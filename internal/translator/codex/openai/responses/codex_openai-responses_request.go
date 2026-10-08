@@ -126,7 +126,8 @@ func SanitizeCodexResponsesRequest(rawJSON []byte) []byte {
 	rawJSON = normalizeEmptyFunctionCallArguments(rawJSON)
 
 	// Codex Responses rejects a status field on input items (clients echoing
-	// back output items often carry it), so strip it from every input element.
+	// back output items often carry it), so strip it from input elements
+	// (except web_search_call, where the upstream requires status).
 	var strippedInputStatus bool
 	rawJSON, strippedInputStatus = stripCodexInputItemStatus(rawJSON)
 	if strippedInputStatus {
@@ -245,9 +246,13 @@ func deleteCodexRequestFields(rawJSON []byte, paths ...string) []byte {
 	return rawJSON
 }
 
-// stripCodexInputItemStatus removes the status field from every element of the
-// input array. The Codex upstream answers {"detail":"Unknown parameter:
+// stripCodexInputItemStatus removes the status field from input array elements.
+// The Codex upstream answers {"detail":"Unknown parameter:
 // 'input[N].status'"} when clients echo back output items that carry a status.
+// Exception: web_search_call items keep their status — the same upstream
+// requires it there and answers 400 "Missing required parameter:
+// 'input[N].status'" when it is absent (observed 2026-10 with Codex Desktop
+// conversations containing web search history).
 // Deleting object keys never reindexes the array, so original indices stay valid.
 func stripCodexInputItemStatus(rawJSON []byte) (out []byte, stripped bool) {
 	out = rawJSON
@@ -255,7 +260,10 @@ func stripCodexInputItemStatus(rawJSON []byte) (out []byte, stripped bool) {
 	if !input.IsArray() {
 		return out, false
 	}
-	for i := range input.Array() {
+	for i, item := range input.Array() {
+		if item.Get("type").String() == "web_search_call" {
+			continue
+		}
 		path := "input." + strconv.Itoa(i) + ".status"
 		if !gjson.GetBytes(out, path).Exists() {
 			continue

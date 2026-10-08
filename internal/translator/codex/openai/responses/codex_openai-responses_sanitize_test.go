@@ -27,7 +27,8 @@ func TestInputItemStatusStripped(t *testing.T) {
 		"input": [
 			{"type": "message", "role": "user", "status": "completed", "content": [{"type": "input_text", "text": "hi"}]},
 			{"type": "reasoning", "id": "rs_1"},
-			{"type": "function_call", "status": "completed", "call_id": "c1", "name": "f", "arguments": "{}"}
+			{"type": "function_call", "status": "completed", "call_id": "c1", "name": "f", "arguments": "{}"},
+			{"type": "web_search_call", "id": "ws_1", "status": "completed", "action": {"type": "search", "query": "q"}}
 		]
 	}`)
 
@@ -39,6 +40,11 @@ func TestInputItemStatusStripped(t *testing.T) {
 			t.Errorf("%s should be deleted, but it was found with value: %s", path, gjson.Get(outputStr, path).Raw)
 		}
 		_ = i
+	}
+	// web_search_call items must keep their status: the Codex upstream requires
+	// it and answers 400 "Missing required parameter: 'input[N].status'" otherwise.
+	if got := gjson.Get(outputStr, "input.3.status").String(); got != "completed" {
+		t.Errorf("input.3 (web_search_call) status should be preserved, got %q", got)
 	}
 	// Non-status item fields must survive.
 	if got := gjson.Get(outputStr, "input.0.content.0.text").String(); got != "hi" {
