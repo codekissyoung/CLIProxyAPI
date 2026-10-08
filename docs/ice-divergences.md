@@ -44,6 +44,10 @@ Key conflict sites are tagged in code with `// ice divergence: ...`.
    All mutators reject work after `Stop()` (regression guard for
    post-shutdown writes; `TestSessionCacheRejectsWritesAfterStop`).
    Keep alongside upstream's `ensureInitializedLocked` nil-guards.
+   2026-10-08: submitted upstream as PR
+   https://github.com/router-for-me/CLIProxyAPI/pull/6462 (adds the same
+   stopped guards plus purge-on-Stop). Drop the local divergence once a
+   merge brings in an equivalent upstream change.
 
 4. **xAI OAuth concurrency gating** (`conductor_execution.go`,
    `conductor.go`, `home_concurrency.go`)
@@ -179,6 +183,11 @@ Key conflict sites are tagged in code with `// ice divergence: ...`.
    `collectOutputItem`, `codexOutputItemsRetainLimit` = 16 MiB)
    Bounds memory spent patching `response.completed` output. Upstream
    collects unboundedly via `collectCodexOutputItemDone`.
+   2026-10-08: submitted upstream as PR
+   https://github.com/router-for-me/CLIProxyAPI/pull/6461 (byte-reporting
+   `collectCodexOutputItemDone` plus a bounded `codexOutputItemPatchBuffer`
+   at both HTTP stream loops). Drop the local divergence once a merge
+   brings in an equivalent upstream change.
 
 10. **Codex upstream-error diagnostics** (`codex_executor_terminal.go`)
     `codexErrorAuthInfo`, `logCodexUpstreamError`, context-reject
@@ -382,13 +391,21 @@ Key conflict sites are tagged in code with `// ice divergence: ...`.
     upstream's new convention bullets merge in above them.
 
 13. **Fork top-level keys survive the v8 layout migration** (2026-10-08,
-    `config_v8.go` `iceV8TopLevelKeys` / `v8AllowedRoots`). Upstream's
+    `config_v8.go` `iceV8TopLevelKeys` / `iceV8FileOnlyRoots`). Upstream's
     `commentUnknownV8Fields` drops every top-level key that is not a known v8
-    root. The fork's `account-concurrency-limit` (#15 per-credential capacity gate, `credential_capacity.go`) and `xai-oauth-max-concurrency` have no v8
-    home, so after the 2026-10-01 merge both were "commented out" on every
-    load (warning in the log each reload), decoded as 0 and the gates were
-    silently off until 2026-10-08. Any new fork-only top-level key must be
-    added to `iceV8TopLevelKeys`. Pinned by `config_v8_ice_keys_test.go`.
+    root. The fork's `account-concurrency-limit` (#15 per-credential capacity
+    gate), `xai-oauth-max-concurrency`, `allow-pool-pin-header` and the
+    native `codex:` block have no v8 home. The normal load path
+    (`LoadConfigOptional`, migrate=false) never touched them — verified on a
+    masked copy of the live config, old and new code both read 5 / 3 / true —
+    but the migrate=true pass (management `GET/PUT /v8/management/config`
+    preview and any future v8 migration write) commented all four out, with a
+    warning on every management read. Now: the four keys are allowed roots for
+    the comment-out passes; `IsV8ConfigLayout` deletes them from its evidence
+    set so legacy documents are not misdetected as v8; `ValidateV8Config` still
+    rejects a top-level `codex` on the v8 write API (upstream's v8 shape has
+    none). Any new fork-only top-level key must be added to
+    `iceV8TopLevelKeys`. Pinned by `config_v8_ice_keys_test.go`.
 
 ## API surface (sdk/api/handlers, internal/logging, internal/config)
 
