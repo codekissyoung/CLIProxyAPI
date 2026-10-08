@@ -340,6 +340,19 @@ Key conflict sites are tagged in code with `// ice divergence: ...`.
     On every merge that touches `xai_executor_request.go`, diff the two
     constructors field by field.
 
+23. **Generic Codex 429 gets a fixed 30s retry-after** (2026-10-08,
+    `codex_executor_terminal.go` `newCodexStatusErrWithCooling`,
+    `codexRateLimitRetryAfter`). A 429 with no `usage_limit_reached` payload
+    and not a capacity error (`{"detail":"Rate limit exceeded"}`) is a
+    per-minute rate limit. Upstream leaves `retryAfter` nil, so the conductor
+    walks the quota backoff ladder (1s doubling to 30min) on the (auth, model)
+    state; on a 5-account pool that parked accounts for up to half an hour and
+    concentrated traffic on the survivors (78 x 429 in 80 minutes, 2026-10-08).
+    The fork pins `retryAfter = 30s`; the conductor applies it verbatim
+    (>= `minQuotaCooldownFloor`) without escalating the ladder. Usage-limit
+    errors keep upstream reset timing; capacity errors keep the ladder.
+    Pinned by `codex_rate_limit_cooldown_test.go`.
+
 ## Translators (internal/translator)
 
 17. **Codex request sanitize + strip logging** (2026-07-23, commit 70a56375;
@@ -367,6 +380,16 @@ Key conflict sites are tagged in code with `// ice divergence: ...`.
 
 12. **AGENTS.md Deployment Notes / Merge Policy sections** — ice-only;
     upstream's new convention bullets merge in above them.
+
+13. **Fork top-level keys survive the v8 layout migration** (2026-10-08,
+    `config_v8.go` `iceV8TopLevelKeys` / `v8AllowedRoots`). Upstream's
+    `commentUnknownV8Fields` drops every top-level key that is not a known v8
+    root. The fork's `account-concurrency-limit` (#? per-credential capacity
+    gate, `credential_capacity.go`) and `xai-oauth-max-concurrency` have no v8
+    home, so after the 2026-10-01 merge both were "commented out" on every
+    load (warning in the log each reload), decoded as 0 and the gates were
+    silently off until 2026-10-08. Any new fork-only top-level key must be
+    added to `iceV8TopLevelKeys`. Pinned by `config_v8_ice_keys_test.go`.
 
 ## API surface (sdk/api/handlers, internal/logging, internal/config)
 

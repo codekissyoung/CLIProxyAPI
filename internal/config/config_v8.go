@@ -578,7 +578,22 @@ func v8AllowedRoots() map[string]bool {
 		section, _, _ := strings.Cut(path.current, ".")
 		allowed[section] = true
 	}
+	// ice divergence: the fork's own top-level keys have no v8 home upstream.
+	// Without this they are "commented out" by commentUnknownV8Fields on every
+	// load, cfg.AccountConcurrencyLimit / XAIOAuthMaxConcurrency decode as 0 and
+	// both per-credential concurrency gates silently switch off (observed in
+	// production 2026-10-01 .. 2026-10-08 after the v8 migration merge).
+	for _, key := range iceV8TopLevelKeys {
+		allowed[key] = true
+	}
 	return allowed
+}
+
+// iceV8TopLevelKeys lists fork-only top-level config keys that must survive the
+// v8 layout migration untouched. Keep in sync with the yaml tags on Config.
+var iceV8TopLevelKeys = []string{
+	"account-concurrency-limit",
+	"xai-oauth-max-concurrency",
 }
 
 var (

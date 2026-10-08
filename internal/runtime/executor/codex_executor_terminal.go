@@ -401,8 +401,25 @@ func newCodexStatusErrWithCooling(statusCode int, body []byte, modelLevelCooling
 	if retryAfter := parseCodexRetryAfter(errCode, body, time.Now()); retryAfter != nil {
 		err.retryAfter = retryAfter
 	}
+	// ice divergence: a plain 429 (`{"detail":"Rate limit exceeded"}`, no
+	// usage_limit_reached payload, not a capacity error) is a per-minute rate
+	// limit, not quota exhaustion. Without a retry-after the conductor would walk
+	// the quota backoff ladder (1s doubling up to 30min) on the (auth, model)
+	// state, so a burst of RPM 429s on a small pool parked accounts for up to half
+	// an hour and concentrated traffic on the survivors (2026-10-08 incident:
+	// 78 x 429 on 5 accounts in 80 minutes). Pin a short fixed cooldown instead;
+	// the conductor applies it verbatim (>= minQuotaCooldownFloor) without
+	// escalating the ladder.
+	if err.retryAfter == nil && errCode == http.StatusTooManyRequests && !isUsageLimit && !isCodexModelCapacityError(body) {
+		retryAfter := codexRateLimitRetryAfter
+		err.retryAfter = &retryAfter
+	}
 	return err
 }
+
+// codexRateLimitRetryAfter is the fixed cooldown applied to generic Codex 429
+// responses that carry no quota reset metadata (see newCodexStatusErrWithCooling).
+const codexRateLimitRetryAfter = 30 * time.Second
 
 func classifyCodexStatusError(statusCode int, body []byte) []byte {
 	code, errType, ok := codexStatusErrorClassification(statusCode, body)
