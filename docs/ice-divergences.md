@@ -384,8 +384,7 @@ Key conflict sites are tagged in code with `// ice divergence: ...`.
 13. **Fork top-level keys survive the v8 layout migration** (2026-10-08,
     `config_v8.go` `iceV8TopLevelKeys` / `v8AllowedRoots`). Upstream's
     `commentUnknownV8Fields` drops every top-level key that is not a known v8
-    root. The fork's `account-concurrency-limit` (#? per-credential capacity
-    gate, `credential_capacity.go`) and `xai-oauth-max-concurrency` have no v8
+    root. The fork's `account-concurrency-limit` (#15 per-credential capacity gate, `credential_capacity.go`) and `xai-oauth-max-concurrency` have no v8
     home, so after the 2026-10-01 merge both were "commented out" on every
     load (warning in the log each reload), decoded as 0 and the gates were
     silently off until 2026-10-08. Any new fork-only top-level key must be
