@@ -353,6 +353,12 @@ Key conflict sites are tagged in code with `// ice divergence: ...`.
     stripped field names at warn level for Loki. Upstream's service_tier
     normalization (fast→priority, ultrafast passthrough; commit 859c4865)
     is merged inside this function — keep both on future conflicts.
+    2026-10-08 (`1cb7100d`): the `input[].status` strip now exempts
+    `web_search_call` items — the Codex upstream requires status there and
+    400s with "Missing required parameter: 'input[N].status'" when the
+    blanket strip removes it (Codex Desktop web search history). The strip
+    still applies everywhere else ("Unknown parameter: 'input[N].status'"
+    on echoed output items remains the evidence).
 
 ## Config / docs
 
