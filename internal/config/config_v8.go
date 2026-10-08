@@ -543,6 +543,11 @@ func IsV8ConfigLayout(root *yaml.Node) bool {
 	}
 	root = expandConfigAliases(root)
 	sections := v8AllowedRoots()
+	for _, key := range iceV8TopLevelKeys {
+		// ice divergence: fork roots are allowed by the migration passes but are
+		// not evidence of a v8 layout (they exist in legacy documents too).
+		delete(sections, key)
+	}
 	for _, shared := range []string{"api-keys", "plugins", "quota-exceeded", "routing", "client"} {
 		delete(sections, shared)
 	}
@@ -594,7 +599,18 @@ func v8AllowedRoots() map[string]bool {
 var iceV8TopLevelKeys = []string{
 	"account-concurrency-limit",
 	"xai-oauth-max-concurrency",
+	"allow-pool-pin-header",
+	// The fork's `codex:` block (identity-confuse, model-level-cooling, ...)
+	// stays a native root; upstream only remaps codex.optimize-multi-agent-v2
+	// into client.codex via v8ClientPaths before this allowlist is consulted.
+	"codex",
 }
+
+// iceV8FileOnlyRoots are fork roots that must survive the comment-out passes
+// on documents read from disk, but that the v8 write API keeps rejecting:
+// upstream's v8 shape has no top-level `codex`, so accepting it on PUT/PATCH
+// would let a client write a legacy-shaped document through the v8 endpoint.
+var iceV8FileOnlyRoots = []string{"codex"}
 
 var (
 	v8WarnMu   sync.RWMutex
@@ -882,6 +898,9 @@ func ValidateV8Config(data []byte) error {
 	}
 	root = expandConfigAliases(root)
 	allowedRoots := v8AllowedRoots()
+	for _, key := range iceV8FileOnlyRoots {
+		delete(allowedRoots, key)
+	}
 	for _, path := range append(append(append([]configPath(nil), v8Paths...), v8Aliases...), v8SharedStructPaths...) {
 		if legacyPath(root, path.old) != nil {
 			return fmt.Errorf("legacy field %s is not accepted by v8; use %s", path.old, path.current)
