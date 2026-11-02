@@ -75,6 +75,13 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 		return nil, errValidate
 	}
 	req.Payload = originalPayload
+	// Observe a translation refusal before the token refresh or any upstream call.
+	modelInfo, _ := cliproxyauth.ResolvedModelInfo(req)
+	translationReq := sdktranslator.RequestEnvelope{Format: from, Model: baseModel, Stream: true, ModelInfo: modelInfo}
+	originalTranslated, translated, errTranslate := helps.TranslateRequestEnvelopePairWithCodexMultiAgentV2(ctx, opts.Headers, e.cfg, from, to, translationReq, originalPayload, req.Payload)
+	if errTranslate != nil {
+		return nil, errTranslate
+	}
 	token, updatedAuth, errToken := e.ensureAccessToken(ctx, auth)
 	if errToken != nil {
 		return nil, errToken
@@ -84,16 +91,17 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 		reporter.UpdateAccessTokenFingerprint(auth)
 	}
 
-	modelInfo, _ := cliproxyauth.ResolvedModelInfo(req)
-	translationReq := sdktranslator.RequestEnvelope{Format: from, Model: baseModel, Stream: true, ModelInfo: modelInfo}
-	originalTranslated, translated := helps.TranslateRequestEnvelopePairWithCodexMultiAgentV2(ctx, opts.Headers, e.cfg, from, to, translationReq, originalPayload, req.Payload)
-
 	translated, err = helps.ApplyRequestThinking(translated, req, opts, from.String(), to.String(), e.Identifier())
 	if err != nil {
 		return nil, err
 	}
 
-	ctx = helps.WithPayloadFinalizer(ctx, helps.NewPayloadFinalizer(e.cfg, e.Identifier(), baseModel, "antigravity", "request", originalTranslated, req, opts))
+	finalize := helps.NewPayloadFinalizer(e.cfg, e.Identifier(), baseModel, "antigravity", "request", originalTranslated, req, opts)
+	ctx = helps.WithPayloadFinalizer(ctx, func(body []byte) []byte {
+		out := finalize(body)
+		reporter.SetTranslatedRequestMetadata(out, to.String())
+		return out
+	})
 	translated = e.obfuscateSensitiveWords(translated)
 	translated = sanitizeAntigravityGeminiRequestSignatures(baseModel, translated)
 	translated, _ = sjson.DeleteBytes(translated, "request.stream")
@@ -205,6 +213,7 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 		scanner.Buffer(nil, streamScannerBuffer)
 		claudeInputTokens := helps.NewClaudeInputTokenState(from, to, responseFormat, originalPayload)
 		var streamUsage helps.StreamUsageBuffer
+		streamUsage.SetRequestPayload(requestPayload)
 		var streamErr error
 		var pendingJSON []byte
 		var replayCommitted bool
@@ -260,7 +269,7 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 			}
 
 			// Capture accounting before the client-facing filter renames usage.
-			streamUsage.Observe(helps.ParseAntigravityStreamUsage(line))
+			streamUsage.ObserveAntigravityStream(line)
 
 			// Filter usage metadata for all models
 			// Only retain usage statistics in the terminal chunk
@@ -389,7 +398,9 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 		} else if ctx.Err() == nil {
 			// Only a clean end of stream may produce a synthetic terminal event.
 			// Translating [DONE] after a read error would report a truncated
-			// stream as a successful completion.
+			// stream as a successful completion. A clean EOF is a normal end
+			// even without finishReason: real Antigravity tool-call streams
+			// end that way (see antigravityNoFinishReasonSSE).
 			tail := helps.TranslateStreamWithClaudeInputTokens(ctx, to, responseFormat, req.Model, helps.ApplyPatchOriginalRequest(req, opts), translated, []byte("[DONE]"), &param, claudeInputTokens)
 			helps.RecordApplyPatchStreamFailure(ctx, param, reporter, statusErr{code: http.StatusBadGateway, msg: helps.ApplyPatchUpstreamErrorMessage})
 			// Commit upstream output before EOF-generated completion reaches interceptors.

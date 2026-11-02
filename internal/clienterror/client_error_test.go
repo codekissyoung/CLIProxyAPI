@@ -198,6 +198,12 @@ func TestIsRequestFault(t *testing.T) {
 			want:   true,
 		},
 		{
+			name:   "Claude missing thread state plain text",
+			status: http.StatusNotFound,
+			err:    errors.New("No thread state was found for the requested previous_message_id. Replay the full conversation with thread create to start a new Thread."),
+			want:   true,
+		},
+		{
 			name: "Claude missing thread state in response body",
 			err: responseBodyError{
 				status: http.StatusNotFound,
@@ -227,6 +233,26 @@ func TestIsRequestFault(t *testing.T) {
 			status: http.StatusPaymentRequired,
 			err:    errors.New(`{"error":{"message":"Insufficient Balance","type":"unknown_error","param":null,"code":"invalid_request_error"}}`),
 			want:   false,
+		},
+		{
+			name:   "anthropic credit balance too low is payment failure",
+			status: http.StatusBadRequest,
+			err:    errors.New(`{"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits."}}`),
+			want:   false,
+		},
+		{
+			name: "anthropic credit balance too low in response body is payment failure",
+			err: responseBodyError{
+				status: http.StatusBadRequest,
+				body:   `{"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits."}}`,
+			},
+			want: false,
+		},
+		{
+			name:   "anthropic ordinary invalid_request_error remains request fault",
+			status: http.StatusBadRequest,
+			err:    errors.New(`{"type":"error","error":{"type":"invalid_request_error","message":"messages: at least one message is required"}}`),
+			want:   true,
 		},
 		{
 			name:   "structured model_not_found is not request fault",

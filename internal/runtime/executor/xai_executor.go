@@ -50,13 +50,13 @@ const (
 	xaiTokenAuthHeader          = "X-XAI-Token-Auth"
 	xaiTokenAuthValue           = "xai-grok-cli"
 	xaiClientVersionHeader      = "x-grok-client-version"
-	xaiClientIdentifierHeader   = "x-grok-client-identifier"
-	// Follows the official Grok CLI: chat-proxy answers HTTP 426 to stale versions (1.0.13+ required since 2026-10-01,
-	// 上游 #6249）。我们线上 CPA 日志近 48h 已有 45 条 426，所以这个提升是修线上故障。
-	// 语义仍是**兜底**：带了 Grok CLI 版本的请求转发自己的版本
-	// （见 applyXAIGrokCLIClientVersion，分叉 #16 原生 Grok CLI 透传）。
-	// 头名只经 r.Header.Set() 使用，Go 会规范化，所以常量大小写在线上无影响。
-	xaiClientVersionValue         = "1.0.46"
+	// Keep in sync with the current Grok CLI client version that chat-proxy
+	// expects. The server rejects older versions with HTTP 426; it required
+	// 1.0.13+ as of 2026-10-01 (#6249).
+	// This hardcoded value serves as fallback if npm registry resolution fails.
+	xaiClientVersionFallback      = helps.DefaultXAIFallbackClientVersion
+	xaiClientVersionValue         = xaiClientVersionFallback
+	xaiClientIdentifierHeader     = "x-grok-client-identifier"
 	xaiClientIdentifierValue      = "grok-shell"
 	xaiAuthenticateResponseHeader = "x-authenticateresponse"
 	xaiAuthenticateResponseValue  = "authenticate-response"
@@ -82,6 +82,18 @@ func NewXAIExecutor(cfg *config.Config) *XAIExecutor {
 	return &XAIExecutor{cfg: cfg}
 }
 
+// xaiClientVersion returns the active Grok CLI client version (dynamically fetched
+// from npm or falling back to xaiClientVersionFallback).
+func xaiClientVersion() string {
+	return helps.GetXAIClientVersion()
+}
+
+// StartXAIVersionUpdater starts the periodic Grok CLI version updater from npm.
+// proxyURL is the global outbound proxy; an empty value inherits the process environment.
+func StartXAIVersionUpdater(ctx context.Context, proxyURL string) {
+	helps.StartXAIVersionUpdater(ctx, proxyURL)
+}
+
 // Identifier returns the provider identifier.
 func (e *XAIExecutor) Identifier() string {
 	return "xai"
@@ -98,6 +110,7 @@ func (e *XAIExecutor) PrepareRequest(req *http.Request, auth *cliproxyauth.Auth)
 	} else {
 		req.Header.Del("Authorization")
 	}
+	ensureXAIUserAgent(req)
 	var attrs map[string]string
 	if auth != nil {
 		attrs = auth.Attributes

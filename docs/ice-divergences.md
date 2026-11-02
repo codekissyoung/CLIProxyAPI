@@ -21,6 +21,11 @@ Key conflict sites are tagged in code with `// ice divergence: ...`.
    long-lived Claude Code / Codex sessions. This is the documented divergence
    referenced by AGENTS.md. Upstream's Merkle LCP matcher and
    fork/subagent alias isolation layer on top of it — keep both.
+   The 2026-11-02 guardian integration shares one atomic selection sequence
+   between the home and fallback caches, but fallback selections never overwrite
+   the home cache. Ordinary forks/subagents inherit only a same-model parent;
+   guardian looks up the latest real parent selection across models and skips
+   home-only shells whose model binding was invalidated.
    Upstream's `TestManagerSessionAffinityAliasCooldownPreservesSelection`
    (added in 5ab0bca0) asserts failover rebind semantics; the ice adaptation
    expects explicit sessions to return to the recovered home credential.
@@ -312,16 +317,17 @@ Key conflict sites are tagged in code with `// ice divergence: ...`.
     `docs/multi-user-pro-account-hardening.md` for the dated history; drop
     this divergence once upstream's own identity catches up.
 
-21. **xAI 422 downgraded to a non-retryable 400** (2026-07-20, commit
-    `5f84a169`; `xai_executor_response.go` `xaiStatusErr`;
-    pinned by `codex_responses_lite_422_test.go`
-    `TestXAIStatusErrDowngrades422ToNonRetryable400`)
+21. **Codex/xAI 422 downgraded to a non-retryable 400** (2026-07-20, commit
+    `5f84a169`; `codex_executor_terminal.go` `newCodexStatusErrWithCooling` and
+    `xai_executor_response.go` `xaiStatusErr`; pinned by
+    `codex_responses_lite_422_test.go` `TestNewCodexStatusErrDowngrades422ToNonRetryable400`
+    and `TestXAIStatusErrDowngrades422ToNonRetryable400`)
     **Added to this list 2026-10-07 — it had been shipped since 2026-07-20 but
     was never recorded here**, and the 2026-10-07 merge nearly deleted it under
     the "unlisted divergence is merge residue" policy. Only its own test saved
     it. Upstream passes 422 through; Codex CLI responds to a 422 by retrying the
-    same request forever, so ice rewrites it to a non-retryable 400 while
-    preserving the original upstream message.
+    same request forever, so ice rewrites it to a non-retryable 400 on both the
+    Codex and xAI Responses paths while preserving the original upstream message.
     **Scope narrowed 2026-10-07**: upstream added Grok TTS
     (`/v1/audio/speech`, PR #6418) with
     `TestXAIExecutorExecuteSpeechUpstreamErrorScope`, which requires the speech

@@ -13,7 +13,7 @@ func TestReasoningEffortFieldDeletion(t *testing.T) {
 		"input": [{"role": "user", "content": "hello"}]
 	}`)
 
-	output := ConvertOpenAIResponsesRequestToCodex("gpt-5.2", inputJSON, false)
+	output, _ := ConvertOpenAIResponsesRequestToCodex("gpt-5.2", inputJSON, false)
 	outputStr := string(output)
 
 	if gjson.Get(outputStr, "reasoning_effort").Exists() {
@@ -32,7 +32,7 @@ func TestInputItemStatusStripped(t *testing.T) {
 		]
 	}`)
 
-	output := ConvertOpenAIResponsesRequestToCodex("gpt-5.2", inputJSON, false)
+	output, _ := ConvertOpenAIResponsesRequestToCodex("gpt-5.2", inputJSON, false)
 	outputStr := string(output)
 
 	for i, path := range []string{"input.0.status", "input.1.status", "input.2.status"} {
@@ -58,7 +58,7 @@ func TestInputItemStatusStripped(t *testing.T) {
 func TestInputItemStatusStrippedStringInput(t *testing.T) {
 	// String input is normalized into an array before sanitizing; stripping must
 	// not crash or corrupt the payload either way.
-	output := ConvertOpenAIResponsesRequestToCodex("gpt-5.2", []byte(`{"model":"gpt-5.2","input":"hello"}`), false)
+	output, _ := ConvertOpenAIResponsesRequestToCodex("gpt-5.2", []byte(`{"model":"gpt-5.2","input":"hello"}`), false)
 	if got := gjson.Get(string(output), "input.0.content.0.text").String(); got != "hello" {
 		t.Errorf("string input should be normalized to array, got input.0.content.0.text=%q", got)
 	}

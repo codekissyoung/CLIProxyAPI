@@ -44,10 +44,11 @@ func (e *XAIExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req 
 
 	reporter := helps.NewExecutorUsageReporter(ctx, e, prepared.baseModel, auth)
 	defer reporter.TrackFailure(ctx, &err)
-	reporter.SetTranslatedReasoningEffort(prepared.body, e.Identifier())
 
 	url := strings.TrimSuffix(baseURL, "/") + "/responses"
+	prepared.body = sanitizeXAIInputEncryptedContentForBaseURL(prepared.body, baseURL)
 	prepared.body = prepared.finalizePayload(prepared.body)
+	reporter.SetTranslatedReasoningEffort(prepared.body, e.Identifier())
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(prepared.body))
 	if err != nil {
 		return resp, err
@@ -96,20 +97,13 @@ func (e *XAIExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req 
 			continue
 		}
 		eventData := bytes.TrimSpace(line[len(xaiDataTag):])
-		// ice divergence（#16 原生 Grok CLI 透传）：被识别为原生 Grok CLI 的请求整条跳过
-		// 归一化流水线——reasoning-summary 归一、namespace 还原、webSearchAlias 还原、
-		// 内部 x_search 过滤。上游没有这个旁路，所以这里是在上游结构上加守卫。
-		// applyPatch 的记账也在守卫内：原生路径的 applyPatch 是刻意构造的非激活实例。
+		// ice divergence #16: native Grok CLI bypasses normalization, namespace
+		// restoration, web-search alias restoration, and internal x_search filtering.
 		if !prepared.nativeGrokCLI {
 			eventData = xaiNormalizeReasoningSummaryData(eventData)
 		}
-		// 2026-10-07 合并：上游新增的 usage 观测（preserve upstream usage on apply patch
-		// failures）**刻意不进守卫**——原生 Grok CLI 的流量一样要计费，放进去会漏账。
-		// 归一化只动 reasoning summary，不碰 usage 字段，所以原生路径从未归一的事件里
-		// 解析 usage 同样正确。
-		if detail, ok := helps.ParseCodexUsage(eventData); ok {
-			upstreamUsage.Observe(detail, true)
-		}
+		// Usage observation stays outside the native Grok CLI bypass.
+		upstreamUsage.ObserveResponsesStream(eventData)
 		if !prepared.nativeGrokCLI {
 			prepared.applyPatch.RememberDispatcherEvent(eventData)
 			eventData = namespaceRestorer.restore(eventData)
@@ -151,8 +145,10 @@ func (e *XAIExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req 
 					upstreamUsage.PublishFailure(ctx, reporter, errTranslation)
 					return cliproxyexecutor.Response{}, errTranslation
 				}
-				if detail, ok := helps.ParseCodexUsage(eventData); ok {
-					reporter.Publish(ctx, detail)
+				if !upstreamUsage.Publish(ctx, reporter) {
+					if detail, ok := helps.ParseCodexUsageWithOutputItems(completedData, outputItemsByIndex, outputItemsFallback); ok {
+						reporter.Publish(ctx, detail)
+					}
 				}
 				if prepared.responseFormat == sdktranslator.FormatOpenAIResponse {
 					out = helps.EnsureResponsesUsageDetails(out)
@@ -225,10 +221,11 @@ func (e *XAIExecutor) executeCompactRequest(ctx context.Context, auth *cliproxya
 
 	reporter := helps.NewExecutorUsageReporter(ctx, e, prepared.baseModel, auth)
 	defer reporter.TrackFailure(ctx, &err)
-	reporter.SetTranslatedReasoningEffort(prepared.body, e.Identifier())
 
 	requestURL := strings.TrimSuffix(baseURL, "/") + "/responses/compact"
+	prepared.body = sanitizeXAIInputEncryptedContentForBaseURL(prepared.body, baseURL)
 	prepared.body = prepared.finalizePayload(prepared.body)
+	reporter.SetTranslatedReasoningEffort(prepared.body, e.Identifier())
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, bytes.NewReader(prepared.body))
 	if err != nil {
 		return nil, nil, nil, nil, err

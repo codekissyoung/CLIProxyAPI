@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
@@ -16,18 +17,25 @@ import (
 )
 
 func (e *CodexExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+	ctx = helps.WithCodexCommentaryPolicy(ctx, e.cfg)
+	if errExpand := helps.ExpandRecognizedResponsesCompactionCapsules(&req, &opts); errExpand != nil {
+		return cliproxyexecutor.Response{}, statusErr{code: http.StatusBadRequest, msg: errExpand.Error()}
+	}
 	baseModel := thinking.ParseSuffix(req.Model).ModelName
 
 	from := opts.SourceFormat
 	responseFormat := cliproxyexecutor.ResponseFormatOrSource(opts)
 	to := sdktranslator.FromString("codex")
-	body, updatesChanged := helps.TranslateRequestWithAPIKeyModelCompatibilityAndUpdateIntentForExecutor(ctx, opts.Headers, e.cfg, e.Identifier(), from, to, baseModel, req.Payload, false, helps.APIKeyModelIsCompat(req))
+	body, updatesChanged, err := helps.TranslateRequestWithAPIKeyModelCompatibilityAndUpdateIntentForExecutor(ctx, opts.Headers, e.cfg, e.Identifier(), from, to, baseModel, req.Payload, false, helps.APIKeyModelIsCompat(req))
+	if err != nil {
+		return cliproxyexecutor.Response{}, err
+	}
 	originalTranslatedForPayload := append([]byte(nil), body...)
 	if len(opts.OriginalRequest) > 0 {
-		originalTranslatedForPayload, _ = helps.TranslateRequestWithAPIKeyModelCompatibilityAndUpdateIntentForExecutor(ctx, opts.Headers, e.cfg, e.Identifier(), from, to, baseModel, opts.OriginalRequest, false, helps.APIKeyModelIsCompat(req))
+		originalTranslatedForPayload, _, _ = helps.TranslateRequestWithAPIKeyModelCompatibilityAndUpdateIntentForExecutor(ctx, opts.Headers, e.cfg, e.Identifier(), from, to, baseModel, opts.OriginalRequest, false, helps.APIKeyModelIsCompat(req))
 	}
 
-	body, err := helps.ApplyRequestThinking(body, req, opts, from.String(), to.String(), e.Identifier(), updatesChanged)
+	body, err = helps.ApplyRequestThinking(body, req, opts, from.String(), to.String(), e.Identifier(), updatesChanged)
 	if err != nil {
 		return cliproxyexecutor.Response{}, err
 	}

@@ -23,7 +23,7 @@ import (
 )
 
 func TestAntigravityExecutorCAQSTwoTurnReplay(t *testing.T) {
-	sig := signaturetest.AntigravityCAQS()
+	sig := signaturetest.AntigravityCAQSWithChannel(19)
 	previousCache, previousStrict := cache.SignatureCacheEnabled(), cache.SignatureBypassStrictMode()
 	t.Cleanup(func() {
 		cache.SetSignatureCacheEnabled(previousCache)
@@ -133,7 +133,7 @@ func TestAntigravityExecutorCAQSTwoTurnReplay(t *testing.T) {
 						cache.CacheSignature(model, text, sig)
 						t.Cleanup(func() { _ = cache.DeleteCachedSignatureRequired(context.Background(), model, text) })
 						recovery := []byte(`{"model":"claude-opus-5-5-high","messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"caqs-cache-recovery-test"}]},{"role":"user","content":"continue"}]}`)
-						recovered := antigravityclaude.ConvertClaudeRequestToAntigravity(model, recovery, false)
+						recovered, _ := antigravityclaude.ConvertClaudeRequestToAntigravity(model, recovery, false)
 						if gjson.GetBytes(recovered, "request.contents.0.parts.0.thoughtSignature").String() != sig {
 							t.Fatal("cache recovery changed original signature")
 						}

@@ -281,6 +281,21 @@ func verifyAccountedHomeConcurrencyIdentity(tuple homeConcurrencyTuple, auth *Au
 // SafeResponseHeaders returns trusted response headers only for concrete
 // Home-generated retry errors and CPA's concrete concurrency busy errors.
 func SafeResponseHeaders(err error) http.Header {
+	// An exhausted Home round owns the aggregated multi-credential deadline;
+	// a per-attempt trusted annotation deeper in the chain must not replace it.
+	var exhausted *homeRetryRoundExhaustedError
+	if errors.As(err, &exhausted) && exhausted != nil {
+		// A nil aggregate means immediate or no aggregate hint; the last
+		// attempt's positive hint must not replace that decision.
+		if retryAfter := exhausted.RetryAfter(); retryAfter != nil {
+			return safeRetryAfterHeader(*retryAfter)
+		}
+		return nil
+	}
+	var trusted *trustedRetryAfterError
+	if errors.As(err, &trusted) && trusted != nil {
+		return trusted.SafeResponseHeaders()
+	}
 	var busy *HomeConcurrencyBusyError
 	if errors.As(err, &busy) && busy != nil {
 		return busy.SafeResponseHeaders()
@@ -292,14 +307,6 @@ func SafeResponseHeaders(err error) http.Header {
 	var capacityBusy *accountConcurrencyBusyError
 	if errors.As(err, &capacityBusy) && capacityBusy != nil {
 		return capacityBusy.SafeResponseHeaders()
-	}
-	var exhausted *homeRetryRoundExhaustedError
-	if errors.As(err, &exhausted) && exhausted != nil {
-		retryAfter := exhausted.RetryAfter()
-		if retryAfter == nil {
-			return nil
-		}
-		return safeRetryAfterHeader(*retryAfter)
 	}
 	var cooldown *homeDispatchRetryAfterError
 	if errors.As(err, &cooldown) && cooldown != nil {
@@ -316,6 +323,12 @@ func SafeResponseHeaders(err error) http.Header {
 	var unavailable *authUnavailableError
 	if errors.As(err, &unavailable) && unavailable != nil {
 		return unavailable.Headers()
+	}
+	var safeHeaderProvider interface{ SafeResponseHeaders() http.Header }
+	if errors.As(err, &safeHeaderProvider) && safeHeaderProvider != nil {
+		if value := safeHeaderProvider.SafeResponseHeaders().Get("Retry-After"); value != "" {
+			return http.Header{"Retry-After": []string{value}}
+		}
 	}
 	return nil
 }

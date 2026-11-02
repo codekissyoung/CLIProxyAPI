@@ -166,7 +166,7 @@ func qwenDisableCooling(cfg *config.Config, auth *cliproxyauth.Auth) bool {
 	return cfg.DisableCooling
 }
 
-func parseRetryAfterHeader(header http.Header, now time.Time) *time.Duration {
+func parseQwenRetryAfterHeader(header http.Header, now time.Time) *time.Duration {
 	raw := strings.TrimSpace(header.Get("Retry-After"))
 	if raw == "" {
 		return nil
@@ -421,7 +421,7 @@ func (e *QwenExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req
 
 			errCode, retryAfter := wrapQwenError(ctx, httpResp.StatusCode, b)
 			if errCode == http.StatusTooManyRequests && retryAfter == nil {
-				retryAfter = parseRetryAfterHeader(httpResp.Header, time.Now())
+				retryAfter = parseQwenRetryAfterHeader(httpResp.Header, time.Now())
 			}
 			if errCode == http.StatusTooManyRequests && retryAfter == nil && qwenDisableCooling(e.cfg, auth) && isQwenQuotaError(b) {
 				defaultRetryAfter := time.Second
@@ -559,7 +559,7 @@ func (e *QwenExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Aut
 
 			errCode, retryAfter := wrapQwenError(ctx, httpResp.StatusCode, b)
 			if errCode == http.StatusTooManyRequests && retryAfter == nil {
-				retryAfter = parseRetryAfterHeader(httpResp.Header, time.Now())
+				retryAfter = parseQwenRetryAfterHeader(httpResp.Header, time.Now())
 			}
 			if errCode == http.StatusTooManyRequests && retryAfter == nil && qwenDisableCooling(e.cfg, auth) && isQwenQuotaError(b) {
 				defaultRetryAfter := time.Second

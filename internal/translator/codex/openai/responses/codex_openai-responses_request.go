@@ -13,7 +13,7 @@ import (
 	"github.com/tidwall/sjson"
 )
 
-func ConvertOpenAIResponsesRequestToCodex(modelName string, inputRawJSON []byte, _ bool) []byte {
+func ConvertOpenAIResponsesRequestToCodex(modelName string, inputRawJSON []byte, _ bool) ([]byte, error) {
 	rawJSON := inputRawJSON
 
 	inputResult := util.GetGJSONBytesNoCopy(rawJSON, "input")
@@ -25,7 +25,9 @@ func ConvertOpenAIResponsesRequestToCodex(modelName string, inputRawJSON []byte,
 
 	rawJSON = setCodexRequiredBool(rawJSON, "stream", true)
 	rawJSON = setCodexRequiredBool(rawJSON, "store", false)
-	rawJSON = setCodexRequiredBool(rawJSON, "parallel_tool_calls", true)
+	if gjson.GetBytes(rawJSON, "parallel_tool_calls").Type != gjson.False {
+		rawJSON = setCodexRequiredBool(rawJSON, "parallel_tool_calls", true)
+	}
 	rawJSON = setCodexRequiredInclude(rawJSON)
 
 	rawJSON = SanitizeCodexResponsesRequest(rawJSON)
@@ -37,7 +39,7 @@ func ConvertOpenAIResponsesRequestToCodex(modelName string, inputRawJSON []byte,
 	rawJSON = convertSystemRoleToDeveloper(rawJSON)
 	rawJSON = normalizeCodexBuiltinTools(rawJSON)
 
-	return rawJSON
+	return rawJSON, nil
 }
 
 // SanitizeCodexResponsesRequest drops or rewrites top-level request fields that the
