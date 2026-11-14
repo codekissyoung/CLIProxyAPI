@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/tidwall/gjson"
+	"github.com/MoeForge/moego/ojson"
 )
 
 // CodexRequestProfile summarizes the size and composition of an outbound Codex
@@ -33,12 +33,12 @@ func ProfileCodexRequest(body []byte) CodexRequestProfile {
 		TypeCounts: map[string]int{},
 		TypeBytes:  map[string]int{},
 	}
-	input := gjson.GetBytes(body, "input")
+	input := ojson.GetBytes(body, "input")
 	if !input.Exists() || !input.IsArray() {
 		return p
 	}
 	p.InputBytes = len(input.Raw)
-	input.ForEach(func(_, item gjson.Result) bool {
+	input.ForEach(func(_, item ojson.Result) bool {
 		p.InputItems++
 		itemType := item.Get("type").String()
 		if itemType == "" {

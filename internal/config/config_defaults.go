@@ -6,4 +6,5 @@ const (
 	DefaultAuthDir               = "~/.cli-proxy-api"
 	DefaultLogsMaxTotalSizeMB    = 5120
 	DefaultDiscoveryServiceType  = "_ai-gateway._tcp"
+	DefaultKVStorePath           = "kv.db"
 )

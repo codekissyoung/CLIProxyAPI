@@ -7,11 +7,11 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	log "github.com/sirupsen/logrus"
-	"github.com/tidwall/gjson"
 )
 
 // xaiSpeechRequestError marks upstream speech failures caused by the request itself,
@@ -45,11 +45,11 @@ var xaiSpeechModelUnavailablePatterns = [...]string{
 // xaiSpeechModelUnavailable reports whether an upstream error body says the speech model
 // itself is missing, unsupported or unavailable, as opposed to a bad request value.
 func xaiSpeechModelUnavailable(body []byte) bool {
-	if !gjson.ValidBytes(body) {
+	if !ojson.ValidBytes(body) {
 		return xaiSpeechModelUnavailableText(string(body))
 	}
 	for _, path := range []string{"code", "error.code", "type", "error.type", "error", "error.message", "message", "detail"} {
-		if xaiSpeechModelUnavailableText(gjson.GetBytes(body, path).String()) {
+		if xaiSpeechModelUnavailableText(ojson.GetBytesNoCopy(body, path).String()) {
 			return true
 		}
 	}
@@ -71,8 +71,7 @@ func xaiSpeechModelUnavailableText(text string) bool {
 // request-scoped. 400/422 stay unwrapped because the auth manager already treats them as
 // request faults while still honoring model-support errors.
 func xaiSpeechStatusErr(code int, body []byte) error {
-	// 走 base：ice 在 xaiStatusErr 里的 422→400 降级是给 /v1/responses 的 Codex CLI
-	// 重试循环用的，语音路径要保留上游的 422 语义（见 xaiStatusErrBase 注释）。
+	// Keep upstream 422 semantics on speech; the ice downgrade is scoped to Codex Responses retry loops.
 	err := xaiStatusErrBase(code, body)
 	if err.code == http.StatusNotFound && !xaiSpeechModelUnavailable(body) {
 		return xaiSpeechRequestError{statusErr: err}
@@ -81,7 +80,7 @@ func xaiSpeechStatusErr(code int, body []byte) error {
 }
 
 func (e *XAIExecutor) executeSpeech(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (resp cliproxyexecutor.Response, err error) {
-	model := strings.TrimSpace(gjson.GetBytes(req.Payload, "model").String())
+	model := strings.TrimSpace(ojson.GetBytesNoCopy(req.Payload, "model").String())
 	if model == "" {
 		model = strings.TrimSpace(req.Model)
 	}
@@ -93,7 +92,9 @@ func (e *XAIExecutor) executeSpeech(ctx context.Context, auth *cliproxyauth.Auth
 	logXAIResolvedBaseURL(ctx, strings.TrimSuffix(requestURL, xaiTTSPath))
 
 	// Payload rules target the "openai" protocol, matching xAI image/video and config.example.yaml.
-	payload := helps.NewPayloadFinalizer(e.cfg, e.Identifier(), model, "openai", "", req.Payload, req, opts)(req.Payload)
+	doc := ojson.NewDoc(req.Payload)
+	helps.FinalizePayloadDoc(helps.WithPayloadFinalizer(ctx, helps.NewPayloadFinalizer(e.cfg, e.Identifier(), model, "openai", "", req.Payload, req, opts)), doc)
+	payload := doc.Bytes()
 	reporter.SetTranslatedRequestMetadata(payload, "openai")
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, bytes.NewReader(payload))
 	if err != nil {
@@ -119,11 +120,11 @@ func (e *XAIExecutor) executeSpeech(ctx context.Context, auth *cliproxyauth.Auth
 	helps.RecordAPIResponseMetadata(ctx, e.cfg, httpResp.StatusCode, httpResp.Header.Clone())
 
 	data, err := io.ReadAll(httpResp.Body)
+	helps.AppendAPIResponseChunk(ctx, e.cfg, data)
 	if err != nil {
 		helps.RecordAPIResponseError(ctx, e.cfg, err)
 		return resp, err
 	}
-	helps.AppendAPIResponseChunk(ctx, e.cfg, data)
 
 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
 		helps.LogWithRequestID(ctx).Debugf("request error, error status: %d, error message: %s", httpResp.StatusCode, helps.SummarizeErrorBody(httpResp.Header.Get("Content-Type"), data))

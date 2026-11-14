@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/MoeForge/moego/ojson"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
-	"github.com/tidwall/gjson"
 )
 
 // The responses-lite marker header must reach the upstream: codex-tui sends a
@@ -65,10 +65,10 @@ func TestNewCodexStatusErrDowngrades422ToNonRetryable400(t *testing.T) {
 	if statusError.code != http.StatusBadRequest {
 		t.Fatalf("code = %d, want %d", statusError.code, http.StatusBadRequest)
 	}
-	if got := gjson.Get(statusError.msg, "error.type").String(); got != "invalid_request_error" {
+	if got := ojson.Get(statusError.msg, "error.type").String(); got != "invalid_request_error" {
 		t.Fatalf("error.type = %q, want invalid_request_error (conductor keys non-retryable handling off this)", got)
 	}
-	if got := gjson.Get(statusError.msg, "error.message").String(); got != serdeMsg {
+	if got := ojson.Get(statusError.msg, "error.message").String(); got != serdeMsg {
 		t.Fatalf("error.message = %q, want original upstream message preserved", got)
 	}
 }
@@ -93,7 +93,7 @@ func TestXAIStatusErrDowngrades422ToNonRetryable400(t *testing.T) {
 	if !strings.Contains(statusError.msg, "invalid_request_error") {
 		t.Fatalf("msg = %q, want invalid_request_error marker", statusError.msg)
 	}
-	if got := gjson.Get(statusError.msg, "error.message").String(); got != serdeMsg {
+	if got := ojson.Get(statusError.msg, "error.message").String(); got != serdeMsg {
 		t.Fatalf("error.message = %q, want original upstream message preserved", got)
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
@@ -20,8 +21,6 @@ import (
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	log "github.com/sirupsen/logrus"
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
 const (
@@ -162,7 +161,7 @@ func codexWebsocketTurnEventID(err error, payload []byte) error {
 		return err
 	}
 	withID := *turnErr
-	withID.EventID = gjson.GetBytes(payload, "event_id").String()
+	withID.EventID = strings.Clone(ojson.GetBytesNoCopy(payload, "event_id").String())
 	return &withID
 }
 
@@ -174,14 +173,16 @@ func normalizeCodexWebsocketParallelToolCalls(body []byte, headers http.Header) 
 	return body
 }
 
+func normalizeCodexWebsocketParallelToolCallsDoc(doc *ojson.Doc, headers http.Header) bool {
+	if !isCodexResponsesLiteRequestDoc(doc, headers) {
+		return false
+	}
+	return helps.SetBoolIfDifferentDoc(doc, "parallel_tool_calls", false)
+}
+
 func buildCodexWebsocketRequestBody(body []byte) []byte {
-	// ice divergence: workspaces subtree strip（docs/ice-divergences.md #11 的相关项）。
-	// 2026-10-07 合并时上游把清洗从 frameCodexWebsocketRequestBody 拆出来放到这里
-	// （framing 保持纯粹），所以这条 strip 跟着搬过来，顺序仍是先 sanitize 再 strip。
-	// 这个 strip 是无条件的隐私保护：client_metadata.x-codex-turn-metadata 里的
-	// workspaces 带本地路径 / git remote / commit hash，绝不能离开代理。上游已经
-	// 没有等价物（git grep stripCodexBodyTurnMetadataWorkspaces upstream/main 为空），
-	// 清单第 11 条「本来就在上游侧」的记录已过期，按隐私要求保留。
+	// ice divergence: always strip local paths and git metadata from the
+	// body-mirrored turn metadata before framing the websocket request.
 	return frameCodexWebsocketRequestBody(stripCodexBodyTurnMetadataWorkspaces(helps.SanitizeCodexInputItemIDs(body)))
 }
 
@@ -190,7 +191,7 @@ func frameCodexWebsocketRequestBody(body []byte) []byte {
 	if len(body) == 0 {
 		return nil
 	}
-	wsReqBody, errSet := sjson.SetBytes(body, "type", "response.create")
+	wsReqBody, errSet := ojson.SetBytes(body, "type", "response.create")
 	if errSet == nil && len(wsReqBody) > 0 {
 		return wsReqBody
 	}

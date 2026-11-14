@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tidwall/gjson"
+	"github.com/MoeForge/moego/ojson"
 )
 
 // CodexContextRejectCache remembers request fingerprints that the upstream has
@@ -44,9 +44,9 @@ func CodexContextFingerprint(body []byte) string {
 	if len(body) == 0 {
 		return ""
 	}
-	model := gjson.GetBytes(body, "model").String()
-	instructions := gjson.GetBytes(body, "instructions").String()
-	input := gjson.GetBytes(body, "input")
+	model := ojson.GetBytes(body, "model").String()
+	instructions := ojson.GetBytes(body, "instructions").String()
+	input := ojson.GetBytes(body, "input")
 	if !input.Exists() {
 		return ""
 	}

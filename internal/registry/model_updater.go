@@ -97,8 +97,6 @@ func detectChangedProviders(oldData, newData *staticModelsJSON) []string {
 		{"codex", oldData.CodexTeam, newData.CodexTeam},
 		{"codex", oldData.CodexPlus, newData.CodexPlus},
 		{"codex", oldData.CodexPro, newData.CodexPro},
-		{"qwen", oldData.Qwen, newData.Qwen},
-		{"iflow", oldData.IFlow, newData.IFlow},
 		{"kimi", oldData.Kimi, newData.Kimi},
 		{"kimi-ai", oldData.Kimi, newData.Kimi},
 		{"kimi.ai", oldData.Kimi, newData.Kimi},
@@ -243,18 +241,6 @@ func validateModelsCatalog(data *staticModelsJSON) error {
 			return err
 		}
 	}
-	optionalSections := []struct {
-		name   string
-		models []*ModelInfo
-	}{
-		{name: "qwen", models: data.Qwen},
-		{name: "iflow", models: data.IFlow},
-	}
-	for _, section := range optionalSections {
-		if err := validateOptionalModelSection(section.name, section.models); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
@@ -279,11 +265,4 @@ func validateModelSection(section string, models []*ModelInfo) error {
 		seen[modelID] = struct{}{}
 	}
 	return nil
-}
-
-func validateOptionalModelSection(section string, models []*ModelInfo) error {
-	if len(models) == 0 {
-		return nil
-	}
-	return validateModelSection(section, models)
 }

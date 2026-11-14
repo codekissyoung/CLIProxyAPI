@@ -36,7 +36,13 @@ Key conflict sites are tagged in code with `// ice divergence: ...`.
    The model also purges a credential's affinity bindings on the
    enabled->disabled transition (`conductor_lifecycle.go` `updateInternal`;
    pinned by `conductor_update_test.go`) so sessions re-home instead of
-   sticking to a disabled pool account.
+   sticking to a disabled pool account. Upstream's `rebind-on: never` is the
+   deliberate exception: `InvalidateAuth` retains those bindings so a disabled,
+   removed, or model-incompatible home returns the bound-credential error rather
+   than silently re-homing. Home lookup accepts both the ice provider/session key
+   and upstream's provider/session/model key. Every home, fallback, guardian,
+   and cold pick participates in upstream's weighted reservation/commit flow;
+   temporary failover binds only `fallbackCache` and never rewrites home.
 
 2. **Session binding counts** (`session_cache.go`)
    `bindingCounts` + `SetBindingCountObserver`/`BindingCount` report logical
@@ -353,7 +359,14 @@ Key conflict sites are tagged in code with `// ice divergence: ...`.
     `xai_executor_tokens.go:25`, `xai_websockets_executor.go:522`), caught by
     `TestXAIExecutorNativeGrokCLINonStreamReturnsResponseObject` as a SIGSEGV.
     On every merge that touches `xai_executor_request.go`, diff the two
-    constructors field by field.
+    constructors field by field. The 2026-11-14 merge added `doc *ojson.Doc` and
+    moved execute/stream/tokens/websocket entry points to
+    `prepareResponsesRequestDoc`; the native Grok CLI gate must exist on both
+    that entry point and the byte-returning compatibility wrapper. The native
+    constructor carries `doc`, deliberately keeps direct Responses translation
+    instead of the normalizing compatibility pipeline, applies thinking through
+    the Doc helper, and leaves user payload rules to `finalizePayload` exactly
+    once rather than applying them early.
 
 23. **Generic Codex 429 gets a fixed 30s retry-after** (2026-10-08,
     `codex_executor_terminal.go` `newCodexStatusErrWithCooling`,
@@ -378,9 +391,17 @@ Key conflict sites are tagged in code with `// ice divergence: ...`.
     context_management, reasoning_effort, input[].status) beyond upstream's,
     because unsupported params are rejected upstream with 400s that add
     failure signals to pool accounts; every sanitized request logs the
-    stripped field names at warn level for Loki. Upstream's service_tier
-    normalization (fast→priority, ultrafast passthrough; commit 859c4865)
-    is merged inside this function — keep both on future conflicts.
+    stripped field names at warn level for Loki. The original commit also maps
+    chat-style `response_format` to `text.format` (`text`/`json_schema`) and
+    strips `metadata`; those behaviors are part of this divergence. Upstream's
+    service_tier normalization (fast→priority, ultrafast passthrough; commit
+    859c4865) is merged inside this function — keep both on future conflicts.
+    The 2026-11-14 `ojson.Doc` port preserves upstream's lazy no-change path and
+    its new `max_output_tokens` retention/fallback behavior. OpenAI Responses
+    still drops `temperature`/`top_p`, while Interactions preserves them because
+    upstream now copies and tests them as supported fields; the ice-only penalty,
+    metadata, response-format, reasoning-effort, and input-status cleanup stays
+    shared.
     2026-10-08 (`1cb7100d`): the `input[].status` strip now exempts
     `web_search_call` items — the Codex upstream requires status there and
     400s with "Missing required parameter: 'input[N].status'" when the

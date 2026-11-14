@@ -12,6 +12,9 @@ const (
 	codexBuiltinImage25FlareModelID    = "gpt-image-2.5-flare"
 	codexBuiltinImage25SunburstModelID = "gpt-image-2.5-sunburst"
 	codexBuiltinImage25ModelID         = "gpt-image-2.5"
+	codexBuiltinImage26FlareModelID    = "gpt-image-2.6-flare"
+	codexBuiltinImage26SunburstModelID = "gpt-image-2.6-sunburst"
+	codexBuiltinImage26ModelID         = "gpt-image-2.6"
 	xaiBuiltinImageModelID             = "grok-imagine-image"
 	xaiBuiltinImageQualityModelID      = "grok-imagine-image-quality"
 	xaiBuiltinImage20ModelID           = "grok-imagine-image-2.0"
@@ -33,8 +36,6 @@ type staticModelsJSON struct {
 	CodexTeam   []*ModelInfo `json:"codex-team"`
 	CodexPlus   []*ModelInfo `json:"codex-plus"`
 	CodexPro    []*ModelInfo `json:"codex-pro"`
-	Qwen        []*ModelInfo `json:"qwen"`
-	IFlow       []*ModelInfo `json:"iflow"`
 	Kimi        []*ModelInfo `json:"kimi"`
 	Antigravity []*ModelInfo `json:"antigravity"`
 	XAI         []*ModelInfo `json:"xai"`
@@ -80,16 +81,6 @@ func GetCodexPlusModels() []*ModelInfo {
 // GetCodexProModels returns model definitions for the Codex pro plan tier.
 func GetCodexProModels() []*ModelInfo {
 	return WithCodexBuiltins(cloneModelInfos(getModels().CodexPro))
-}
-
-// GetQwenModels returns the standard Qwen model definitions.
-func GetQwenModels() []*ModelInfo {
-	return cloneModelInfos(getModels().Qwen)
-}
-
-// GetIFlowModels returns the standard iFlow model definitions.
-func GetIFlowModels() []*ModelInfo {
-	return cloneModelInfos(getModels().IFlow)
 }
 
 // GetKimiModels returns the standard Kimi (Moonshot AI) model definitions.
@@ -267,6 +258,9 @@ func WithCodexBuiltins(models []*ModelInfo) []*ModelInfo {
 		codexBuiltinImage25FlareModelInfo(),
 		codexBuiltinImage25SunburstModelInfo(),
 		codexBuiltinImage25ModelInfo(),
+		codexBuiltinImage26FlareModelInfo(),
+		codexBuiltinImage26SunburstModelInfo(),
+		codexBuiltinImage26ModelInfo(),
 	)
 }
 
@@ -341,6 +335,42 @@ func codexBuiltinImage25ModelInfo() *ModelInfo {
 		Type:        "openai",
 		DisplayName: "GPT Image 2.5",
 		Version:     codexBuiltinImage25ModelID,
+	}
+}
+
+func codexBuiltinImage26FlareModelInfo() *ModelInfo {
+	return &ModelInfo{
+		ID:          codexBuiltinImage26FlareModelID,
+		Object:      "model",
+		Created:     1704067200, // 2024-01-01
+		OwnedBy:     "openai",
+		Type:        "openai",
+		DisplayName: "GPT Image 2.6 Flare",
+		Version:     codexBuiltinImage26FlareModelID,
+	}
+}
+
+func codexBuiltinImage26SunburstModelInfo() *ModelInfo {
+	return &ModelInfo{
+		ID:          codexBuiltinImage26SunburstModelID,
+		Object:      "model",
+		Created:     1704067200, // 2024-01-01
+		OwnedBy:     "openai",
+		Type:        "openai",
+		DisplayName: "GPT Image 2.6 Sunburst",
+		Version:     codexBuiltinImage26SunburstModelID,
+	}
+}
+
+func codexBuiltinImage26ModelInfo() *ModelInfo {
+	return &ModelInfo{
+		ID:          codexBuiltinImage26ModelID,
+		Object:      "model",
+		Created:     1704067200, // 2024-01-01
+		OwnedBy:     "openai",
+		Type:        "openai",
+		DisplayName: "GPT Image 2.6",
+		Version:     codexBuiltinImage26ModelID,
 	}
 }
 
@@ -531,8 +561,6 @@ func cloneModelInfos(models []*ModelInfo) []*ModelInfo {
 //   - vertex
 //   - aistudio
 //   - codex
-//   - qwen
-//   - iflow
 //   - kimi
 //   - antigravity
 //   - xai
@@ -553,10 +581,6 @@ func GetStaticModelDefinitionsByChannel(channel string) []*ModelInfo {
 		return GetAIStudioModels()
 	case "codex":
 		return GetCodexProModels()
-	case "qwen":
-		return GetQwenModels()
-	case "iflow":
-		return GetIFlowModels()
 	case "kimi", "kimi-ai", "kimi.ai", "kimi.com":
 		return GetKimiModels()
 	case "antigravity":
@@ -616,8 +640,6 @@ func LookupStaticModelInfo(modelID string) *ModelInfo {
 		data.Vertex,
 		data.AIStudio,
 		data.CodexPro,
-		data.Qwen,
-		data.IFlow,
 		data.Kimi,
 		data.Antigravity,
 		data.XAI,
